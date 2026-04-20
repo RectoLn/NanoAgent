@@ -878,7 +878,7 @@ createApp({
     };
 
     // ── 发送 ──
-    const send = () => {
+    const send = async () => {
       const q = question.value.trim();
       if (!q) return;
       if (currentEventSource) currentEventSource.close();
@@ -889,8 +889,26 @@ createApp({
       if (turnCount > 1) timeline.push({ kind: 'divider', turn: turnCount });
 
       const [provider, model] = parseModel(selectedModel.value);
-      const sid = currentSessionId.value || '';
-      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid)}`;
+      let sid = currentSessionId.value;
+
+      // 如果没有会话，先创建新会话
+      if (!sid) {
+        try {
+          const r = await fetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, model_id: model }) });
+          if (r.ok) {
+            const d = await r.json();
+            sid = d.session_id;
+            currentSessionId.value = sid;
+            currentSessionTitle.value = d.title || '新对话';
+            fetchSessions();
+            localStorage.setItem('currentSessionId', sid);
+          }
+        } catch (e) {
+          console.error('创建会话失败:', e);
+        }
+      }
+
+      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid || '')}`;
       currentEventSource = new EventSource(url);
       let finalItem = null;
 
