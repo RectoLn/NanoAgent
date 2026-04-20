@@ -294,7 +294,7 @@ def chat_stream(
     # 启动任务
     task_id = TASK_MGR.start_task(session.session_id, question, agent, history)
 
-def event_gen():
+    def event_gen():
         saved = False
         try:
             # 首先推送 session_id 和 task_id 给前端
@@ -329,6 +329,7 @@ def event_gen():
 
                 # 短暂等待，避免忙等
                 import time
+
                 time.sleep(0.1)
         except GeneratorExit:
             pass
