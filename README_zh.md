@@ -1,4 +1,4 @@
-# NanoAgent v0.2
+# NanoAgent v0.3
 
 一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册和 Web UI。
 

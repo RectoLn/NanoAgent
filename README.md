@@ -1,4 +1,4 @@
-# NanoAgent v0.2
+# NanoAgent v0.3
 
 A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
 
