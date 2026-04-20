@@ -876,6 +876,8 @@ createApp({
         } catch (err) { console.error(err); }
       };
       es.onerror = (e) => {
+        // 若 currentEventSource 已被 done 处理清空，说明正常结束后浏览器触发的多余 onerror，静默忽略
+        if (!currentEventSource) return;
         currentEventSource.close(); currentEventSource = null;
         loading.value = false;
         closeAllCards();
