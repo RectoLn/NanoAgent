@@ -10,6 +10,7 @@
 - **多模型支持**：DeepSeek (Chat/Reasoner)、Kilo (GPT-4o、Claude 等)
 - **工具系统**：基于 `@tool` 装饰器自动注册
 - **任务管理**：多步骤任务规划与状态跟踪
+- **会话持久化**：独立会话存储，自动保存到 JSON 文件
 - **Web UI**：FastAPI 后端 + Vue 3 前端，流式输出
 - **实时流式**：逐 token 实时输出
 
@@ -26,6 +27,24 @@ docker compose up -d
 # 3. 浏览器访问
 http://localhost:9090
 ```
+
+## Windows Docker 环境设置
+
+1. **安装 Docker Desktop**：
+   - 从 [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) 下载
+   - 安装并启动 Docker Desktop
+   - 确保启用 WSL2（推荐以获得更好性能）
+
+2. **运行服务**：
+   ```cmd
+   cd C:\path\to\NanoAgent
+   docker-compose up
+   ```
+
+3. **访问 Web UI**：
+   - 浏览器打开 `http://localhost:9090`
+
+**注意**：确保 9090 端口可用。Docker Desktop 提供了完整的容器化环境，适合开发和部署。
 
 ## 环境变量
 
@@ -53,6 +72,7 @@ app/
 ├── agent.py          # Tool Call 循环实现
 ├── client.py        # LLM 客户端（OpenAI 兼容）
 ├── registry.py     # 工具注册表
+├── session_manager.py # 会话持久化管理
 ├── todo_manager.py # Todo 状态管理
 ├── server.py      # FastAPI 服务
 ├── tools/        # 工具实现

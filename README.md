@@ -10,6 +10,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
 - **Multi-Provider LLM Support**: DeepSeek (Chat/Reasoner), Kilo (GPT-4o, Claude, etc.)
 - **Tool System**: Auto-registered tools with `@tool` decorator
 - **Todo Management**: Multi-step task planning and tracking
+- **Session Persistence**: Independent session storage with automatic saving to JSON files
 - **Web UI**: FastAPI backend + Vue 3 frontend with stream output
 - **Markov Streaming**: Real-time token-by-token output
 
@@ -26,6 +27,24 @@ docker compose up -d
 # 3. Open browser
 http://localhost:9090
 ```
+
+## Windows Setup with Docker
+
+1. **Install Docker Desktop**:
+   - Download from [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/)
+   - Install and start Docker Desktop
+   - Ensure WSL2 is enabled (recommended for better performance)
+
+2. **Run the service**:
+   ```cmd
+   cd C:\path\to\NanoAgent
+   docker-compose up
+   ```
+
+3. **Access the web UI**:
+   - Open browser to `http://localhost:9090`
+
+**Note**: Ensure port 9090 is available. Docker Desktop provides a complete containerized environment for development and deployment.
 
 ## Environment Variables
 
@@ -53,6 +72,7 @@ app/
 ├── agent.py          # Tool Call loop implementation
 ├── client.py        # LLM client (OpenAI compatible)
 ├── registry.py     # Tool registry
+├── session_manager.py # Session persistence management
 ├── todo_manager.py # Todo state management
 ├── server.py      # FastAPI server
 ├── tools/        # Tool implementations
