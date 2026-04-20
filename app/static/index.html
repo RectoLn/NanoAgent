@@ -715,16 +715,13 @@ createApp({
         if (!r.ok) return;
         const data = await r.json();
         timeline.splice(0, timeline.length);
-        // 从 session 数据恢复 todos（后端同步）
         todos.splice(0, todos.length, ...(data.tasks || []));
         turnCount = 0;
         Object.keys(callCards).forEach(k => delete callCards[k]);
         stepCounter = 0;
         currentSessionId.value = sid;
         currentSessionTitle.value = data.title;
-        currentTaskId.value = null;
         localStorage.setItem('currentSessionId', sid);
-        localStorage.removeItem('currentTaskId');
 
         const cardMap = {};
         let stepNum = 0, curTurn = 0;
@@ -751,7 +748,12 @@ createApp({
           }
         }
         turnCount = curTurn;
-        nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
+        // 如果有当前任务，继续观察
+        if (currentTaskId.value) {
+          await resumeTask(currentTaskId.value);
+        } else {
+          nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
+        }
       } catch (e) { console.error(e); }
     };
 
@@ -761,6 +763,9 @@ createApp({
         if (sid === currentSessionId.value) {
           if (currentEventSource) currentEventSource.close();
           resetAll();
+        } else {
+          // 如果删除的任务所属会话，清除任务
+          // 但现在任务独立，暂时不处理
         }
         fetchSessions();
       } catch {}
