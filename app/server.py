@@ -34,7 +34,6 @@ from fastapi import FastAPI, Query, Path as FPath
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -269,7 +268,6 @@ def chat(req: ChatRequest):
 
 @app.get("/chat/stream")
 def chat_stream(
-    request: Request,
     question: str = Query(..., description="用户问题"),
     provider: str = Query("kilo"),
     model_id: str = Query(""),
@@ -295,48 +293,49 @@ def chat_stream(
     task_id = TASK_MGR.start_task(session.session_id, question, agent, history)
 
     def event_gen():
-        saved = False
-        try:
-            # 首先推送 session_id 和 task_id 给前端
-            yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'task_id', 'task_id': task_id}, ensure_ascii=False)}\n\n"
+        import time
 
-            last_index = 0
+        # 首先推送 session_id 和 task_id 给前端
+        yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'task_id', 'task_id': task_id}, ensure_ascii=False)}\n\n"
+
+        last_index = 0
+        try:
             while True:
-                # 获取新事件
                 new_events = TASK_MGR.get_events_from_index(task_id, last_index)
                 for event in new_events:
+                    last_index += 1  # 无论什么类型都先递增，防止跳过
                     if event["type"] == "new_messages":
-                        # 保存本轮新消息到 session（不推给前端）
                         for msg in event["messages"]:
                             session.add_message(msg)
+                        # new_messages 不推给前端，继续下一个
                         continue
                     elif event["type"] == "todo_update":
-                        # 更新 session.tasks
                         session.tasks = event["items"]
                     payload = json.dumps(event, ensure_ascii=False)
                     yield f"data: {payload}\n\n"
-                    last_index += 1
 
-                # 如果任务完成，退出
+                # 任务完成：把剩余未处理的 new_messages 也处理掉，然后保存
                 if TASK_MGR.is_task_done(task_id):
-                    saved = True
+                    # 再扫一遍确保没有漏掉的 new_messages
+                    remaining = TASK_MGR.get_events_from_index(task_id, last_index)
+                    for event in remaining:
+                        last_index += 1
+                        if event["type"] == "new_messages":
+                            for msg in event["messages"]:
+                                session.add_message(msg)
+                        elif event["type"] == "todo_update":
+                            session.tasks = event["items"]
+                        else:
+                            payload = json.dumps(event, ensure_ascii=False)
+                            yield f"data: {payload}\n\n"
+                    SESSION_MGR._save_session(session.session_id)
                     break
 
-                # 检查客户端是否断开
-                if request.is_disconnected():
-                    break
-
-                # 短暂等待，避免忙等
-                import time
-
-                time.sleep(0.1)
+                time.sleep(0.05)
         except GeneratorExit:
-            pass
-        finally:
-            # 无论正常结束还是客户端断开，都保存当前状态
-            if not saved:
-                SESSION_MGR._save_session(session.session_id)
+            # 客户端断开，保存当前已有的消息
+            SESSION_MGR._save_session(session.session_id)
 
     return StreamingResponse(
         event_gen(),
