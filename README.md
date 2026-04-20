@@ -55,6 +55,24 @@ http://localhost:9090
 | `LLM_MODEL_ID` | Model ID (e.g., `kilo-auto/free`) |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key (optional) |
 
+## Configuration
+
+Agent behavior can be customized via `app/config.yaml`:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `agent.max_steps` | Maximum reasoning steps per query | 50 |
+| `agent.temperature` | LLM temperature (creativity vs consistency) | 0.1 |
+| `agent.nag_threshold` | Rounds without todo tool before reminder injection | 3 |
+
+**Example config.yaml:**
+```yaml
+agent:
+  max_steps: 50
+  temperature: 0.1
+  nag_threshold: 3
+```
+
 ## Available Models
 
 | Provider | Model | Description |

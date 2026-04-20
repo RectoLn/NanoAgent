@@ -55,6 +55,24 @@ http://localhost:9090
 | `LLM_MODEL_ID` | 模型 ID（如 `kilo-auto/free`） |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key（可选） |
 
+## 配置选项
+
+Agent 行为可以通过 `app/config.yaml` 自定义：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `agent.max_steps` | 每次查询的最大推理步骤 | 50 |
+| `agent.temperature` | LLM 温度参数（创造性 vs 一致性） | 0.1 |
+| `agent.nag_threshold` | 未调用 todo 工具的连续轮数阈值（注入提醒） | 3 |
+
+**config.yaml 示例：**
+```yaml
+agent:
+  max_steps: 50
+  temperature: 0.1
+  nag_threshold: 3
+```
+
 ## 可用模型
 
 | 提供商 | 模型 | 说明 |
