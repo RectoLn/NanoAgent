@@ -38,7 +38,7 @@ http://localhost:9090
 2. **运行服务**：
    ```cmd
    cd C:\path\to\NanoAgent
-   docker-compose up
+   docker-compose up --build
    ```
 
 3. **访问 Web UI**：
