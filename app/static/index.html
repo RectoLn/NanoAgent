@@ -871,9 +871,18 @@ createApp({
         } catch (err) { console.error(err); }
       };
 
-      currentEventSource.onerror = () => {
+      currentEventSource.onerror = (e) => {
         currentEventSource.close(); currentEventSource = null; loading.value = false; closeAllCards();
-        timeline.push({ kind: 'error', content: '连接中断' });
+        if (e && e.target && e.target.status === 404) {
+          if (currentSessionId.value) {
+            delete sessionTaskMap[currentSessionId.value];
+            localStorage.removeItem('task_map_' + currentSessionId.value);
+          }
+          currentTaskId.value = null;
+          timeline.push({ kind: 'error', content: '任务已结束或不存在' });
+        } else {
+          timeline.push({ kind: 'error', content: '连接中断' });
+        }
       };
     };
 
@@ -983,9 +992,13 @@ createApp({
         } catch (err) { console.error(err); }
       };
 
-      currentEventSource.onerror = () => {
+      currentEventSource.onerror = (e) => {
         currentEventSource.close(); currentEventSource = null; loading.value = false; closeAllCards();
-        timeline.push({ kind: 'error', content: '连接中断' });
+        if (e && e.target && e.target.status === 404) {
+          timeline.push({ kind: 'error', content: '任务已结束或不存在' });
+        } else {
+          timeline.push({ kind: 'error', content: '连接中断' });
+        }
       };
     };
 
