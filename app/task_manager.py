@@ -18,7 +18,7 @@ import uuid
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 
-from agent import ReActAgent
+from agent import ToolCallAgent
 from session_manager import SESSION_MGR
 
 
@@ -40,7 +40,7 @@ class TaskManager:
         self,
         session_id: str,
         question: str,
-        agent: ReActAgent,
+        agent: ToolCallAgent,
         history: Optional[List[Dict]] = None,
     ) -> str:
         """启动新任务，在独立线程运行 agent.run_iter()，直接在线程内保存 session"""

@@ -1,79 +1,58 @@
 """
-全局工具注册表 + @tool 装饰器 + Tool Call Schema。
+工具执行器 + Tool Call Schema。
 
-工具函数用 @tool 装饰器注册，TOOLS_SCHEMA 用于传给 OpenAI-compatible API，
-TOOL_EXECUTORS 用于 harness 执行工具调用。
+TOOL_EXECUTORS: 工具名 -> kwargs 执行函数，供 execute_tool_call() 调用。
+TOOLS_SCHEMA:   OpenAI-compatible API 的工具描述列表，传给 LLM。
+
+tools/ 目录下各模块仍用 @tool 装饰器注册（供 tools/__init__.py 自动发现），
+但注册结果（TOOLS 字典）不再使用，已移除。
 """
 
 import json
 from typing import Callable, Dict, Any, List
 
-# 全局注册表：工具名 -> { description, func }
-TOOLS: Dict[str, Dict[str, Any]] = {}
-
 
 def tool(name: str, description: str) -> Callable:
-    """装饰器：把函数注册为工具。"""
+    """装饰器：供 tools/ 各模块使用，保持文件结构不变；注册结果不再收集。"""
+
     def decorator(func: Callable) -> Callable:
-        if name in TOOLS:
-            print(f"⚠️ 工具 {name} 已存在，将被覆盖。")
-        TOOLS[name] = {
-            "description": description,
-            "func": func,
-        }
         return func
+
     return decorator
-
-
-def get_tool_names() -> List[str]:
-    return list(TOOLS.keys())
-
-
-def get_tool_descriptions() -> str:
-    """生成供 Prompt 使用的工具说明清单（兼容旧 ReAct 模式）。"""
-    if not TOOLS:
-        return "（无可用工具）"
-    return "\n".join(f"- {n}: {m['description']}" for n, m in TOOLS.items())
-
-
-def execute(tool_name: str, tool_input: str = "") -> str:
-    """执行工具（旧 ReAct 文本模式，保留兼容）。"""
-    if tool_name not in TOOLS:
-        return f"错误：未找到名为 '{tool_name}' 的工具。可用工具：{get_tool_names()}"
-    try:
-        func = TOOLS[tool_name]["func"]
-        result = func(tool_input) if tool_input else func()
-        return str(result)
-    except Exception as e:
-        return f"工具 '{tool_name}' 执行失败: {e}"
 
 
 # ─────────────────────────────────────────────
 # Tool Call 模式：kwargs 适配器
 # ─────────────────────────────────────────────
 
+
 def _exec_bash(command: str = "") -> str:
     from tools.bash import bash
+
     return bash(command)
 
 
 def _exec_read(path: str = "") -> str:
     from tools.read_file import read_file
+
     return read_file(path)
 
 
 def _exec_write_file(path: str = "", content: str = "") -> str:
     from tools.write_file import write_file
+
     return write_file(f"{path}|||{content}")
 
 
 def _exec_edit(path: str = "", old_str: str = "", new_str: str = "") -> str:
     from tools.edit_file import edit_file
+
     return edit_file(f"{path}|||{old_str}|||{new_str}")
 
 
 def _exec_todo(tasks: list = None) -> str:
     from todo_manager import TODO
+
     if tasks is None:
         return TODO.render()
     return TODO.update(tasks)
@@ -81,16 +60,19 @@ def _exec_todo(tasks: list = None) -> str:
 
 def _exec_get_current_time() -> str:
     from tools.current_time import get_current_time
+
     return get_current_time()
 
 
 def _exec_get_system_info() -> str:
     from tools.system_info import get_system_info
+
     return get_system_info()
 
 
 def _exec_web_fetch(url: str = "") -> str:
     from tools.web_fetch import web_fetch
+
     return web_fetch(url)
 
 
@@ -143,12 +125,12 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "要执行的完整 bash 命令，例如 'ls -la /app/workspace'"
+                        "description": "要执行的完整 bash 命令，例如 'ls -la /app/workspace'",
                     }
                 },
-                "required": ["command"]
-            }
-        }
+                "required": ["command"],
+            },
+        },
     },
     {
         "type": "function",
@@ -160,12 +142,12 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "文件的绝对路径或相对路径"
+                        "description": "文件的绝对路径或相对路径",
                     }
                 },
-                "required": ["path"]
-            }
-        }
+                "required": ["path"],
+            },
+        },
     },
     {
         "type": "function",
@@ -177,16 +159,16 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "文件路径（绝对路径或相对路径）"
+                        "description": "文件路径（绝对路径或相对路径）",
                     },
                     "content": {
                         "type": "string",
-                        "description": "要写入的完整文件内容"
-                    }
+                        "description": "要写入的完整文件内容",
+                    },
                 },
-                "required": ["path", "content"]
-            }
-        }
+                "required": ["path", "content"],
+            },
+        },
     },
     {
         "type": "function",
@@ -196,22 +178,19 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件路径"
-                    },
+                    "path": {"type": "string", "description": "文件路径"},
                     "old_str": {
                         "type": "string",
-                        "description": "要被替换的原始字符串（必须在文件中唯一存在）"
+                        "description": "要被替换的原始字符串（必须在文件中唯一存在）",
                     },
                     "new_str": {
                         "type": "string",
-                        "description": "替换后的新字符串，留空表示删除"
-                    }
+                        "description": "替换后的新字符串，留空表示删除",
+                    },
                 },
-                "required": ["path", "old_str", "new_str"]
-            }
-        }
+                "required": ["path", "old_str", "new_str"],
+            },
+        },
     },
     {
         "type": "function",
@@ -231,32 +210,37 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                                 "text": {"type": "string"},
                                 "status": {
                                     "type": "string",
-                                    "enum": ["pending", "in_progress", "completed", "cancelled"]
-                                }
+                                    "enum": [
+                                        "pending",
+                                        "in_progress",
+                                        "completed",
+                                        "cancelled",
+                                    ],
+                                },
                             },
-                            "required": ["id", "text", "status"]
-                        }
+                            "required": ["id", "text", "status"],
+                        },
                     }
                 },
-                "required": ["tasks"]
-            }
-        }
+                "required": ["tasks"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "get_current_time",
             "description": "获取当前本地时间（YYYY-MM-DD HH:MM:SS 格式），无需参数。",
-            "parameters": {"type": "object", "properties": {}}
-        }
+            "parameters": {"type": "object", "properties": {}},
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "get_system_info",
             "description": "获取当前容器的操作系统版本与 Python 版本，无需参数。",
-            "parameters": {"type": "object", "properties": {}}
-        }
+            "parameters": {"type": "object", "properties": {}},
+        },
     },
     {
         "type": "function",
@@ -272,11 +256,11 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "目标 URL，例如 'https://httpbin.org/get'"
+                        "description": "目标 URL，例如 'https://httpbin.org/get'",
                     }
                 },
-                "required": ["url"]
-            }
-        }
+                "required": ["url"],
+            },
+        },
     },
 ]

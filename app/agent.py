@@ -87,7 +87,7 @@ class ToolCallAgent:
         else:
             messages = [
                 {"role": "system", "content": self.system_prompt},
-                {"role": "user",   "content": question},
+                {"role": "user", "content": question},
             ]
 
         # 记录本轮新增消息（不含历史），供 session 保存
@@ -143,7 +143,9 @@ class ToolCallAgent:
                     # 极少数情况：content 为空但 finish_reason=stop，再流式请求
                     full = ""
                     stream_messages = messages[:]  # 包含完整 context
-                    for event in self.llm.think_stream(stream_messages, temperature=self.temperature):
+                    for event in self.llm.think_stream(
+                        stream_messages, temperature=self.temperature
+                    ):
                         if event["type"] == "content":
                             full += event["content"]
                             yield {"type": "answer_chunk", "content": event["content"]}
@@ -164,7 +166,7 @@ class ToolCallAgent:
                 for tc in message.tool_calls:
                     tool_name = tc.function.name
                     args_json = tc.function.arguments or "{}"
-                    call_id   = tc.id
+                    call_id = tc.id
 
                     # 给前端发送 tool_call 事件（预览参数摘要）
                     preview = args_json[:120] + ("…" if len(args_json) > 120 else "")
@@ -201,7 +203,10 @@ class ToolCallAgent:
             if finish_reason == "length":
                 yield {"type": "error", "content": "模型输出因 token 限制被截断"}
             else:
-                yield {"type": "error", "content": f"意外的 finish_reason: {finish_reason}"}
+                yield {
+                    "type": "error",
+                    "content": f"意外的 finish_reason: {finish_reason}",
+                }
             yield {"type": "new_messages", "messages": new_messages}
             yield {"type": "done"}
             return
@@ -231,7 +236,3 @@ class ToolCallAgent:
                 if not final_text:
                     final_text = f"（{event['content']}）"
         return final_text
-
-
-# ── 旧 ReActAgent 别名（保留 server.py 兼容）────────────────────────────────
-ReActAgent = ToolCallAgent

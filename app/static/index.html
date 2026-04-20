@@ -662,6 +662,9 @@ createApp({
     const sessions      = reactive([]);
     const currentSessionId    = ref(null);
     const currentSessionTitle = ref('');
+    // currentTaskId: 当前会话关联任务的快捷引用（与 sessionTaskMap[currentSessionId] 保持同步）
+    // sessionTaskMap: 所有会话的 session_id -> task_id 持久化映射（localStorage task_map_<sid>）
+    // 维护两份状态是为了：currentTaskId 用于快速读取/清空，sessionTaskMap 用于跨会话恢复
     const currentTaskId = ref(null);
     const selectedModel = ref('kilo:kilo-auto/free');
     const ctxLen        = ref('—');
@@ -806,19 +809,23 @@ createApp({
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     };
 
-    // ── 恢复任务 ──
-    const resumeTask = async (taskId) => {
-      if (!taskId) return;
-      if (currentEventSource) currentEventSource.close();
-      loading.value = true;
-      const url = `/tasks/${taskId}/stream?last_index=0`;
-      currentEventSource = new EventSource(url);
+    // ── 公共 SSE 事件处理 ──
+    // opts.onDone:      done 事件后的额外回调（如 focus 输入框）
+    // opts.onSessionId: session_id 事件回调（send 专用）
+    // opts.onTaskId:    task_id 事件回调（send 专用）
+    // opts.onFinal:     final 事件后的额外回调（如 fetchSessions）
+    const attachStreamHandlers = (es, opts = {}) => {
       let finalItem = null;
-
-      currentEventSource.onmessage = (e) => {
+      es.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
           switch (ev.type) {
+            case 'session_id':
+              if (opts.onSessionId) opts.onSessionId(ev);
+              break;
+            case 'task_id':
+              if (opts.onTaskId) opts.onTaskId(ev);
+              break;
             case 'question':
               timeline.push({ kind: 'question', content: ev.content });
               scrollBottom();
@@ -828,11 +835,7 @@ createApp({
               break;
             case 'observation': {
               const card = callCards[ev.call_id];
-              if (card) {
-                card.observation = ev.content;
-                card.running = false;
-                card.expanded = false;
-              }
+              if (card) { card.observation = ev.content; card.running = false; card.expanded = false; }
               scrollBottom();
               break;
             }
@@ -854,6 +857,7 @@ createApp({
               if (!finalItem) timeline.push({ kind: 'final', content: ev.content });
               else finalItem.content = ev.content;
               finalItem = null;
+              if (opts.onFinal) opts.onFinal();
               scrollBottom();
               break;
             case 'error':
@@ -866,13 +870,15 @@ createApp({
               currentEventSource.close(); currentEventSource = null;
               loading.value = false;
               finalItem = null;
+              if (opts.onDone) opts.onDone();
               break;
           }
         } catch (err) { console.error(err); }
       };
-
-      currentEventSource.onerror = (e) => {
-        currentEventSource.close(); currentEventSource = null; loading.value = false; closeAllCards();
+      es.onerror = (e) => {
+        currentEventSource.close(); currentEventSource = null;
+        loading.value = false;
+        closeAllCards();
         if (e && e.target && e.target.status === 404) {
           if (currentSessionId.value) {
             delete sessionTaskMap[currentSessionId.value];
@@ -884,6 +890,15 @@ createApp({
           timeline.push({ kind: 'error', content: '连接中断' });
         }
       };
+    };
+
+    // ── 恢复任务 ──
+    const resumeTask = async (taskId) => {
+      if (!taskId) return;
+      if (currentEventSource) currentEventSource.close();
+      loading.value = true;
+      currentEventSource = new EventSource(`/tasks/${taskId}/stream?last_index=0`);
+      attachStreamHandlers(currentEventSource);
     };
 
     // ── 发送 ──
@@ -919,87 +934,19 @@ createApp({
 
       const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid || '')}`;
       currentEventSource = new EventSource(url);
-      let finalItem = null;
-
-      currentEventSource.onmessage = (e) => {
-        try {
-          const ev = JSON.parse(e.data);
-          switch (ev.type) {
-        case 'session_id':
-          currentSessionId.value = ev.session_id;
-          fetchSessions();
-          break;
-        case 'task_id':
+      attachStreamHandlers(currentEventSource, {
+        onSessionId: (ev) => { currentSessionId.value = ev.session_id; fetchSessions(); },
+        onTaskId: (ev) => {
           currentTaskId.value = ev.task_id;
           if (currentSessionId.value) {
+            // sessionTaskMap 与 currentTaskId 保持同步（双份状态：前者跨会话持久化，后者是当前快捷引用）
             sessionTaskMap[currentSessionId.value] = ev.task_id;
             localStorage.setItem('task_map_' + currentSessionId.value, ev.task_id);
           }
-          break;
-            case 'question':
-              timeline.push({ kind: 'question', content: ev.content });
-              nextTick(() => chatInput.value?.focus());
-              scrollBottom();
-              break;
-            case 'tool_call':
-              newCard(ev.call_id, ev.name, ev.input_preview);
-              break;
-            case 'observation': {
-              const card = callCards[ev.call_id];
-              if (card) {
-                card.observation = ev.content;
-                card.running = false;
-                card.expanded = false; // 有结果的卡片自动折叠，用户可手动展开
-              }
-              scrollBottom();
-              break;
-            }
-            case 'todo_update': {
-              const items = ev.items || [];
-              todos.splice(0, todos.length, ...items);
-              // 同步更新 session.tasks
-              if (currentSessionId.value) {
-                const session = sessions.find(s => s.session_id === currentSessionId.value);
-                if (session) session.tasks = [...items];
-              }
-              break;
-            }
-            case 'answer_chunk':
-              if (!finalItem) { finalItem = reactive({ kind: 'final', content: '' }); timeline.push(finalItem); }
-              finalItem.content += ev.content;
-              scrollBottom();
-              break;
-            case 'final':
-              if (!finalItem) timeline.push({ kind: 'final', content: ev.content });
-              else finalItem.content = ev.content;
-              finalItem = null;
-              fetchSessions();
-              scrollBottom();
-              break;
-            case 'error':
-              closeAllCards();
-              timeline.push({ kind: 'error', content: ev.content });
-              scrollBottom();
-              break;
-            case 'done':
-              closeAllCards();
-              currentEventSource.close(); currentEventSource = null;
-              loading.value = false;
-              finalItem = null;
-              nextTick(() => chatInput.value?.focus());
-              break;
-          }
-        } catch (err) { console.error(err); }
-      };
-
-      currentEventSource.onerror = (e) => {
-        currentEventSource.close(); currentEventSource = null; loading.value = false; closeAllCards();
-        if (e && e.target && e.target.status === 404) {
-          timeline.push({ kind: 'error', content: '任务已结束或不存在' });
-        } else {
-          timeline.push({ kind: 'error', content: '连接中断' });
-        }
-      };
+        },
+        onFinal: () => fetchSessions(),
+        onDone: () => nextTick(() => chatInput.value?.focus()),
+      });
     };
 
     // ── 新对话 / 重置 ──

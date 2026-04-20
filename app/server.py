@@ -27,6 +27,7 @@ SSE 事件类型：
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -40,13 +41,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from client import HelloAgentsLLM
-from agent import ReActAgent
+from agent import ToolCallAgent
 from session_manager import SESSION_MGR
 from task_manager import TASK_MGR
 import tools  # noqa: F401 触发工具自动注册
 
 # --- FastAPI 应用 ---
-app = FastAPI(title="ReAct Agent API", version="0.2")
+app = FastAPI(title="ReAct Agent API", version="0.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -96,11 +97,11 @@ def _get_llm_config(provider: str, model_id: str = "") -> dict:
     return {"api_key": api_key, "base_url": base_url, "model": model}
 
 
-def _new_agent(provider: str = "kilo", model_id: str = "") -> ReActAgent:
+def _new_agent(provider: str = "kilo", model_id: str = "") -> ToolCallAgent:
     """每次请求新建 Agent 实例。"""
     config = _get_llm_config(provider, model_id)
     llm = HelloAgentsLLM(**config)
-    return ReActAgent(llm=llm)
+    return ToolCallAgent(llm=llm)
 
 
 # --- 路由 ---
@@ -120,14 +121,6 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/todo")
-def get_todo():
-    """返回当前全局 Todo 列表快照。"""
-    from todo_manager import TODO
-
-    return {"items": TODO.items}
-
-
 @app.get("/meta")
 def meta(provider: str = Query("kilo"), model_id: str = Query("")):
     """返回当前配置元信息，供前端展示状态栏。"""
@@ -138,6 +131,34 @@ def meta(provider: str = Query("kilo"), model_id: str = Query("")):
         model_name = f"⚠️ {e}"
     ctx_len = int(os.getenv("LLM_CTX_LEN", "32768"))
     return {"model_id": model_name, "ctx_len": ctx_len}
+
+
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+def _sse_payload(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _poll_task_events(task_id: str, start_index: int = 0):
+    """
+    公共 SSE 生成器：从 start_index 开始轮询任务事件并推送给前端。
+    跳过 new_messages（已在后台线程持久化）。
+    客户端断开时（GeneratorExit）静默退出，后台任务继续运行。
+    """
+    index = start_index
+    try:
+        while True:
+            for event in TASK_MGR.get_events_from_index(task_id, index):
+                index += 1
+                if event["type"] == "new_messages":
+                    continue
+                yield _sse_payload(event)
+            if TASK_MGR.is_task_done(task_id):
+                break
+            time.sleep(0.05)
+    except GeneratorExit:
+        pass
 
 
 # ───────────────────── 会话管理端点 ─────────────────────
@@ -175,9 +196,6 @@ def delete_session(session_id: str = FPath(...)):
     return {"ok": True}
 
 
-# ───────────────────── 对话端点 ─────────────────────
-
-
 @app.get("/tasks/{task_id}/stream")
 def task_stream(
     task_id: str = FPath(...),
@@ -188,42 +206,14 @@ def task_stream(
     纯观察接口，只回放历史事件和订阅新事件，不启动新任务。
     前端断开重连时使用此接口。
     """
-    task = TASK_MGR.get_task(task_id)
-    if not task:
+    if not TASK_MGR.get_task(task_id):
         return JSONResponse({"error": "任务不存在"}, status_code=404)
 
-    def event_gen():
-        import time
-
-        current_index = last_index
-        try:
-            while True:
-                new_events = TASK_MGR.get_events_from_index(task_id, current_index)
-                for event in new_events:
-                    current_index += 1
-                    if event["type"] == "new_messages":
-                        continue  # 已在后台线程保存，不推给前端
-                    payload = json.dumps(event, ensure_ascii=False)
-                    yield f"data: {payload}\n\n"
-
-                if TASK_MGR.is_task_done(task_id):
-                    break
-
-                time.sleep(0.05)
-        except GeneratorExit:
-            pass
-
     return StreamingResponse(
-        event_gen(),
+        _poll_task_events(task_id, start_index=last_index),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_SSE_HEADERS,
     )
-
-
-# ───────────────────── 对话端点 ─────────────────────
 
 
 @app.post("/chat")
@@ -295,38 +285,15 @@ def chat_stream(
     task_id = TASK_MGR.start_task(session.session_id, question, agent, history)
 
     def event_gen():
-        import time
-
-        # 推送 session_id 和 task_id 给前端
-        yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'type': 'task_id', 'task_id': task_id}, ensure_ascii=False)}\n\n"
-
-        last_index = 0
-        try:
-            while True:
-                new_events = TASK_MGR.get_events_from_index(task_id, last_index)
-                for event in new_events:
-                    last_index += 1
-                    # new_messages 已在后台线程保存，这里只推送前端展示类事件
-                    if event["type"] == "new_messages":
-                        continue
-                    payload = json.dumps(event, ensure_ascii=False)
-                    yield f"data: {payload}\n\n"
-
-                if TASK_MGR.is_task_done(task_id):
-                    break
-
-                time.sleep(0.05)
-        except GeneratorExit:
-            pass  # 客户端断开，后台线程仍继续运行并保存 session
+        # 推送 session_id 和 task_id 给前端，然后复用公共轮询生成器
+        yield _sse_payload({"type": "session_id", "session_id": session.session_id})
+        yield _sse_payload({"type": "task_id", "task_id": task_id})
+        yield from _poll_task_events(task_id)
 
     return StreamingResponse(
         event_gen(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_SSE_HEADERS,
     )
 
 

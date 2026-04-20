@@ -15,7 +15,12 @@ class HelloAgentsLLM:
     - think_stream(): 流式输出 content token（最终答案阶段）
     """
 
-    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.base_url = base_url or os.getenv("LLM_BASE_URL")
         self.model = model or os.getenv("LLM_MODEL_ID")
@@ -30,8 +35,8 @@ class HelloAgentsLLM:
             base_url=self.base_url,
             default_headers={
                 "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+                "Content-Type": "application/json",
+            },
         )
 
     def call(
@@ -101,19 +106,3 @@ class HelloAgentsLLM:
         except Exception as e:
             print(f"\n❌ LLM 流式调用失败: {e}")
             yield {"type": "finish", "reason": "error"}
-
-    # ── 旧接口兼容（保留，不删除）────────────────────────
-    def one_chat(self, messages: List[Dict], tools: List[Dict] = None, max_tokens: int = 4096) -> Any:
-        """旧接口兼容。"""
-        choice = self.call(messages, tools=tools, max_tokens=max_tokens)
-        return choice.message if choice else None
-
-    def think(
-        self,
-        messages: List[Dict],
-        stop: Optional[List[str]] = None,
-        temperature: float = 0.1,
-        max_tokens: int = 4096,
-    ) -> Generator[Dict[str, Any], None, None]:
-        """旧 ReAct 流式接口兼容，转发到 think_stream。"""
-        yield from self.think_stream(messages, max_tokens=max_tokens, temperature=temperature)

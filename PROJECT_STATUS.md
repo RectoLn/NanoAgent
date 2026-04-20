@@ -133,6 +133,14 @@ app/
 - `GET /sessions/{sid}`: 获取会话详情
 - `DELETE /sessions/{sid}`: 删除会话
 
+#### 公共辅助 (server.py)
+- `_poll_task_events(task_id, start_index)`: SSE 事件轮询生成器，`chat_stream` 和 `task_stream` 共用
+- `_sse_payload(event)`: 将 event dict 格式化为 SSE data 行
+- `_SSE_HEADERS`: SSE 响应头常量
+
+#### 前端公共函数 (static/index.html)
+- `attachStreamHandlers(es, opts)`: 统一绑定 SSE `onmessage`/`onerror`，`send` 和 `resumeTask` 共用
+
 ### 📊 重要变量
 
 #### 环境变量 (.env)
@@ -185,7 +193,30 @@ def execute_tool_call(name, args_json):
 
 ## 更新日志
 
-### v0.2 (当前 - 2026-04-20)
+### v0.3 (重构 - 2026-04-21)
+
+**死代码清理**
+- `registry.py`：删除旧 ReAct 文本模式遗留的 `TOOLS` 字典、`execute()`、`get_tool_names()`、`get_tool_descriptions()`；`@tool` 装饰器改为 noop 保持工具文件不变
+- `client.py`：删除未使用的 `one_chat()` 和 `think()` 旧接口方法
+- `agent.py`：删除 `ReActAgent = ToolCallAgent` 别名行
+- `server.py`：删除 `GET /todo` 死端点、重复的 `# 对话端点` 注释、函数内 `import time` 局部导入
+- `index.html`：删除 `deleteSession` 中的空 `else` 块
+
+**重命名统一**
+- 全局将 `ReActAgent` 替换为 `ToolCallAgent`（涉及 `server.py`、`task_manager.py`、`main.py`、`agent.py`）
+- `server.py` 版本号 `0.2` → `0.3`
+
+**公共函数抽取（4.1）**
+- `server.py` 新增 `_poll_task_events(task_id, start_index)`：复用于 `task_stream` 和 `chat_stream`，消除 ~35 行重复轮询逻辑
+- `server.py` 新增 `_SSE_HEADERS` 常量、`_sse_payload()` 辅助函数
+
+**前端公共函数抽取（5.1）**
+- `index.html` 新增 `attachStreamHandlers(es, opts)`：统一处理所有 SSE 事件类型，消除 `resumeTask` 和 `send` 中 ~120 行重复的 `onmessage/onerror` 代码
+
+**注释补充（2.4/5.3）**
+- `index.html` `currentTaskId` 声明处加注释，说明与 `sessionTaskMap` 双份状态的设计原因
+
+### v0.2 (2026-04-20)
 - ✅ 重构 SessionManager 为文件夹存储
 - ✅ 添加会话持久化和多轮对话
 - ✅ 优化前端 UX：面板折叠、中断恢复
