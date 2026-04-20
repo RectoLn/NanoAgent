@@ -85,23 +85,21 @@
     font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: #4b5563;
   }
 
-  /* ===== Chat 布局（双栏）===== */
+  /* ===== Chat 布局（单栏）===== */
   .chat-layout {
-    display: grid;
-    grid-template-columns: 1fr 280px;
-    gap: 20px;
+    display: flex;
+    flex-direction: column;
     height: 100vh;
-    max-width: 1200px;
+    max-width: 760px;
     margin: 0 auto;
     width: 100%;
     padding: 20px 24px;
   }
   @media (max-width: 900px) {
-    .chat-layout { grid-template-columns: 1fr; }
-    .todo-panel { display: none; }
+    .todo-panel { display: none !important; }
   }
 
-  .chat-main { display: flex; flex-direction: column; min-width: 0; }
+  .chat-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 
   .chat-header {
     display: flex; justify-content: space-between; align-items: center;
@@ -304,67 +302,68 @@
     color: #991b1b; font-size: 13px;
   }
 
-  /* ===== Todo 面板（右侧）===== */
+  /* ===== Todo 面板（固定右上角）===== */
   .todo-panel {
-    border: 1px solid #e5e5e5; border-radius: 10px;
-    padding: 14px 16px; background: #fafafa;
-    align-self: start;
-    position: sticky; top: 20px;
-    max-height: calc(100vh - 40px); overflow-y: auto;
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 248px;
+    border: 1px solid #e8e8e8;
+    border-radius: 8px;
+    padding: 14px 14px 10px;
+    background: #fff;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
   }
+  .todo-panel::-webkit-scrollbar { width: 3px; }
+  .todo-panel::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 2px; }
+
   .todo-panel h3 {
-    font-size: 11px; color: #666; font-weight: 700;
+    font-size: 10.5px; color: #999; font-weight: 600;
     letter-spacing: 1.2px; text-transform: uppercase;
-    margin-bottom: 12px;
+    margin-bottom: 0; padding-bottom: 10px;
+    border-bottom: 1px solid #f0f0f0;
     display: flex; align-items: center; justify-content: space-between;
   }
   .todo-panel .count {
-    font-family: "SF Mono", Menlo, monospace; font-size: 11px;
-    color: #999; font-weight: 500; letter-spacing: 0;
+    font-family: "SF Mono", Menlo, monospace; font-size: 10px;
+    color: #ccc; font-weight: 400; letter-spacing: 0;
   }
   .todo-empty {
-    font-size: 12px; color: #999; font-style: italic;
-    text-align: center; padding: 16px 0;
+    font-size: 12px; color: #ccc; font-style: italic;
+    text-align: center; padding: 18px 0;
   }
-
-  .todo-item {
-    display: flex; align-items: flex-start; gap: 10px;
-    padding: 8px 0; font-size: 13px; line-height: 1.5;
-    border-bottom: 1px dashed #f0f0f0;
-    transition: background .15s;
-  }
-  .todo-item:last-child { border-bottom: none; }
-  .todo-item .check {
-    flex-shrink: 0; width: 16px; height: 16px; margin-top: 2px;
-    border-radius: 3px; border: 1.5px solid #ccc;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 11px; color: #888;
-  }
-  .todo-item.pending .check { background: transparent; }
-  .todo-item.in_progress .check {
-    border-color: #666; background: #666; color: #fff;
-  }
-  .todo-item.completed .check {
-    border-color: #333; background: #333; color: #fff;
-  }
-  .todo-item.cancelled .check {
-    border-color: #ccc; color: #999;
-  }
-
-  .todo-item .text { flex: 1; color: #333; }
-  .todo-item.completed .text { color: #999; text-decoration: line-through; }
-  .todo-item.cancelled .text { color: #999; text-decoration: line-through; opacity: 0.6; }
-  .todo-item.in_progress .text { color: #000; font-weight: 500; }
 
   /* 进度条 */
   .todo-progress {
-    height: 3px; background: #e5e5e5; border-radius: 2px;
-    overflow: hidden; margin-bottom: 10px;
+    height: 1.5px; background: #f0f0f0;
+    overflow: hidden; margin: 10px 0 8px;
   }
   .todo-progress-bar {
-    height: 100%; background: #666;
-    transition: width .3s ease;
+    height: 100%; background: #333;
+    transition: width .35s ease;
   }
+
+  .todo-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 6px 0; line-height: 1.5;
+    border-bottom: 1px solid #f7f7f7;
+  }
+  .todo-item:last-child { border-bottom: none; }
+
+  /* SVG 图标容器 */
+  .todo-icon {
+    flex-shrink: 0; width: 15px; height: 15px; margin-top: 1.5px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .todo-icon svg { display: block; overflow: visible; }
+
+  .todo-item .text { flex: 1; font-size: 12.5px; color: #444; }
+  .todo-item.completed .text { color: #bbb; text-decoration: line-through; }
+  .todo-item.cancelled  .text { color: #ccc; text-decoration: line-through; opacity: .8; }
+  .todo-item.in_progress .text { color: #111; font-weight: 500; }
 </style>
 </head>
 <body>
@@ -372,8 +371,8 @@
 <div id="app">
   <!-- ===== Landing ===== -->
   <div v-if="!started" class="landing">
-    <h1>Hello Agents</h1>
-    <div class="subtitle">ReAct Agent (Stateless Mode)</div>
+    <h1>Nano_Agent</h1>
+    <div class="subtitle">A minimal ReAct Agent · Tool Call Mode</div>
 
     <div class="status-bar">
       <div class="status-pill">
@@ -420,7 +419,7 @@
           <!-- 用户问题 -->
           <div v-if="item.kind === 'question'" class="bubble-question">{{ item.content }}</div>
 
-          <!-- Step 卡片（每轮一个，包含 Thought + Action + Observation） -->
+          <!-- Tool Call 卡片 -->
           <div
             v-else-if="item.kind === 'step'"
             :class="['step-card', { running: item.running, expanded: item.expanded }]"
@@ -431,31 +430,17 @@
               </svg>
               <span class="step-num">#{{ item.step }}</span>
               <span class="step-title">
-                <template v-if="item.action">
-                  <span class="tool">{{ item.action }}</span>
-                  <span style="color:#9ca3af;"> · {{ truncate(item.input, 50) }}</span>
-                </template>
-                <template v-else-if="item.thought">
-                  {{ truncate(stripFormat(item.thought), 70) }}
-                </template>
-                <template v-else>
-                  <span style="color:#9ca3af;">thinking...</span>
-                </template>
+                <span class="tool">{{ item.action }}</span>
+                <span style="color:#9ca3af;"> · {{ truncate(item.input, 50) }}</span>
               </span>
               <span v-if="item.running" class="step-status running">running</span>
               <span v-else class="step-status done">done</span>
             </div>
 
             <div class="step-body">
-              <!-- Thought -->
-              <div v-if="item.thought" class="step-block thought">
-                <div class="label">Thought</div>
-                <div class="content">{{ stripFormat(item.thought) }}<span v-if="item.thoughtStreaming" class="streaming-dot"></span></div>
-              </div>
-
-              <!-- Action -->
-              <div v-if="item.action" class="step-block action">
-                <div class="label">Action · <span class="tool-name">{{ item.action }}</span></div>
+              <!-- Action (Tool Call) -->
+              <div class="step-block action">
+                <div class="label">Tool · <span class="tool-name">{{ item.action }}</span></div>
                 <div class="content">{{ item.input || '(no input)' }}</div>
               </div>
 
@@ -503,32 +488,49 @@
       </div>
     </div>
 
-    <!-- 右侧：Todo 面板 -->
-    <aside class="todo-panel" v-if="todos.length > 0 || loading">
-      <h3>
-        <span>Tasks</span>
-        <span class="count" v-if="todos.length">{{ completedCount }}/{{ todos.length }}</span>
-      </h3>
-      <div class="todo-progress" v-if="todos.length > 0">
-        <div class="todo-progress-bar" :style="{ width: progressPct + '%' }"></div>
-      </div>
-      <div v-if="todos.length === 0" class="todo-empty">尚未制定计划</div>
-      <div v-else>
-        <div
-          v-for="t in todos"
-          :key="t.id"
-          :class="['todo-item', t.status]"
-        >
-          <span class="check">
-            <template v-if="t.status === 'completed'">✓</template>
-            <template v-else-if="t.status === 'in_progress'">▶</template>
-            <template v-else-if="t.status === 'cancelled'">✕</template>
-          </span>
-          <span class="text">{{ t.text }}</span>
-        </div>
-      </div>
-    </aside>
   </div>
+
+  <!-- 固定右上角：Todo 面板 -->
+  <aside class="todo-panel" v-if="started && (todos.length > 0 || loading)">
+    <h3>
+      <span>Tasks</span>
+      <span class="count" v-if="todos.length">{{ completedCount }}/{{ todos.length }}</span>
+    </h3>
+    <div class="todo-progress" v-if="todos.length > 0">
+      <div class="todo-progress-bar" :style="{ width: progressPct + '%' }"></div>
+    </div>
+    <div v-if="todos.length === 0" class="todo-empty">尚未制定计划</div>
+    <div v-else>
+      <div
+        v-for="t in todos"
+        :key="t.id"
+        :class="['todo-item', t.status]"
+      >
+        <span class="todo-icon">
+          <!-- pending：空心方框 -->
+          <svg v-if="t.status === 'pending'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <rect x="1" y="1" width="11" height="11" rx="1" stroke="#c8c8c8" stroke-width="1.5"/>
+          </svg>
+          <!-- in_progress：方框 + 内部实心小方块 -->
+          <svg v-else-if="t.status === 'in_progress'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <rect x="1" y="1" width="11" height="11" rx="1" stroke="#555" stroke-width="1.5"/>
+            <rect x="4" y="4" width="5" height="5" rx="0.5" fill="#555"/>
+          </svg>
+          <!-- completed：方框 + 折线勾 -->
+          <svg v-else-if="t.status === 'completed'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <rect x="1" y="1" width="11" height="11" rx="1" fill="#2d2d2d"/>
+            <polyline points="3.5,7 5.5,9 9.5,4" stroke="#fff" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"/>
+          </svg>
+          <!-- cancelled：方框 + 横线 -->
+          <svg v-else-if="t.status === 'cancelled'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <rect x="1" y="1" width="11" height="11" rx="1" stroke="#ccc" stroke-width="1.5"/>
+            <line x1="4" y1="6.5" x2="9" y2="6.5" stroke="#ccc" stroke-width="1.5" stroke-linecap="square"/>
+          </svg>
+        </span>
+        <span class="text">{{ t.text }}</span>
+      </div>
+    </div>
+  </aside>
 </div>
 
 <script>
@@ -612,35 +614,32 @@ createApp({
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-    // ===== Step 卡片管理 =====
-    let currentStep = null;
+    // ===== Tool Call 卡片管理 =====
+    let stepCounter = 0;
+    const callCards = {};  // call_id -> reactive card
 
-    const closeStep = () => {
-      if (currentStep) {
-        currentStep.running = false;
-        currentStep.expanded = false;
-        currentStep.thoughtStreaming = false;
-      }
+    const newCard = (callId, toolName, inputPreview) => {
+      stepCounter++;
+      const card = reactive({
+        kind: 'step',
+        step: stepCounter,
+        action: toolName,
+        input: inputPreview,
+        observation: '',
+        running: true,
+        expanded: true,
+      });
+      callCards[callId] = card;
+      timeline.push(card);
+      scrollBottom();
+      return card;
     };
 
-    const ensureStep = (stepNum) => {
-      // 当前 step 不存在或已关闭 → 新建
-      if (!currentStep || !currentStep.running) {
-        closeStep();
-        currentStep = reactive({
-          kind: 'step',
-          step: stepNum,
-          thought: '',
-          action: '',
-          input: '',
-          observation: '',
-          running: true,
-          expanded: true,
-          thoughtStreaming: false,
-        });
-        timeline.push(currentStep);
-        scrollBottom();
-      }
+    const closeAllCards = () => {
+      Object.values(callCards).forEach(c => {
+        c.running = false;
+        c.expanded = false;
+      });
     };
 
     // ===== 发送 =====
@@ -656,76 +655,81 @@ createApp({
       if (!q || loading.value) return;
       loading.value = true;
       question.value = '';
-      currentStep = null;
+      stepCounter = 0;
+      Object.keys(callCards).forEach(k => delete callCards[k]);
 
       const [provider, model] = parseModel(selectedModel.value);
-      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${model}`;
+      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}`;
       const es = new EventSource(url);
+
+      // 积累最终答案流式 token
+      let finalItem = null;
 
       es.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
           switch (ev.type) {
+
             case 'question':
               timeline.push({ kind: 'question', content: ev.content });
               nextTick(() => chatInput.value?.focus());
               scrollBottom();
               break;
 
-            case 'step_start':
-              closeStep();
-              ensureStep(ev.step);
-              if (currentStep) currentStep.thoughtStreaming = true;
+            // 工具调用开始 → 创建新卡片
+            case 'tool_call':
+              newCard(ev.call_id, ev.name, ev.input_preview);
               break;
 
-            case 'thought_chunk':
-              if (!currentStep) ensureStep(1);
-              currentStep.thought += ev.content;
-              scrollBottom();
-              break;
-
-            case 'action':
-              if (!currentStep) ensureStep(1);
-              currentStep.thoughtStreaming = false;
-              currentStep.action = ev.name;
-              currentStep.input = ev.input;
-              scrollBottom();
-              break;
-
-            case 'observation':
-              if (currentStep) {
-                currentStep.observation = ev.content;
-                scrollBottom();
+            // 工具执行结果
+            case 'observation': {
+              const card = callCards[ev.call_id];
+              if (card) {
+                card.observation = ev.content;
+                card.running = false;
+                card.expanded = false;
               }
+              scrollBottom();
               break;
+            }
 
             case 'todo_update':
-              // 直接整体替换
               todos.splice(0, todos.length, ...(ev.items || []));
+              break;
+
+            // 最终答案流式 token
+            case 'answer_chunk':
+              if (!finalItem) {
+                finalItem = reactive({ kind: 'final', content: '' });
+                timeline.push(finalItem);
+              }
+              finalItem.content += ev.content;
               scrollBottom();
               break;
 
-            case 'reminder':
-              // 不再显示 reminder，保持对话干净
-              break;
-
+            // 最终答案完整（非流式路径兜底）
             case 'final':
-              if (currentStep) currentStep.thoughtStreaming = false;
-              closeStep();
-              timeline.push({ kind: 'final', content: ev.content });
+              if (!finalItem) {
+                timeline.push({ kind: 'final', content: ev.content });
+              } else {
+                // 流式路径：以完整文本覆盖（确保一致）
+                finalItem.content = ev.content;
+              }
+              finalItem = null;
               scrollBottom();
               break;
 
             case 'error':
-              closeStep();
+              closeAllCards();
               timeline.push({ kind: 'error', content: ev.content });
               scrollBottom();
               break;
 
             case 'done':
-              closeStep();
+              closeAllCards();
               es.close();
               loading.value = false;
+              finalItem = null;
               nextTick(() => chatInput.value?.focus());
               break;
           }
@@ -735,7 +739,7 @@ createApp({
       es.onerror = () => {
         es.close();
         loading.value = false;
-        closeStep();
+        closeAllCards();
         timeline.push({ kind: 'error', content: '连接中断' });
       };
     };
@@ -744,7 +748,8 @@ createApp({
       timeline.splice(0, timeline.length);
       todos.splice(0, todos.length);
       question.value = '';
-      currentStep = null;
+      stepCounter = 0;
+      Object.keys(callCards).forEach(k => delete callCards[k]);
       nextTick(() => landingInput.value?.focus());
     };
 

@@ -66,11 +66,11 @@ def edit_file(raw_input: str) -> str:
     try:
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(new_content)
-        # 统一放开权限，便于宿主机用户（如 VS Code）后续编辑
+        # 文件权限 666（宿主机可读写，不可执行）
         try:
-            os.chmod(abs_path, 0o777)
+            os.chmod(abs_path, 0o666)
         except Exception as chmod_err:
-            print(f"[edit_file] chmod 0o777 失败（忽略）: {chmod_err}")
+            print(f"[edit_file] chmod 0o666 失败（忽略）: {chmod_err}")
     except Exception as e:
         return f"写回文件失败: {e}"
 
@@ -78,5 +78,5 @@ def edit_file(raw_input: str) -> str:
     action = "删除" if new_text == "" else "替换"
     return (
         f"✅ 已对 {abs_path} 执行 {action}（old_text {len(old_text)} 字符 -> "
-        f"new_text {len(new_text)} 字符，文件净变化 {delta:+d} 字符，权限 0o777）"
+        f"new_text {len(new_text)} 字符，文件净变化 {delta:+d} 字符，权限 0o666）"
     )

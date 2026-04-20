@@ -22,9 +22,11 @@ def bash(command: str = "") -> str:
     if not command or not command.strip():
         return "错误：命令为空，请提供要执行的 bash 命令"
 
+    # 设置 umask 0000，使新建文件权限为 666，目录权限为 777
+    wrapped = f"umask 0000; {command}"
     try:
         result = subprocess.run(
-            ["/bin/bash", "-c", command],
+            ["/bin/bash", "-c", wrapped],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT,

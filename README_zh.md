@@ -1,10 +1,12 @@
-# NanoAgent v0.1
+# NanoAgent v0.2
 
 一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册和 Web UI。
 
+> [English](./README.md)
+
 ## 功能特性
 
-- **ReAct 循环**：Thought → Action → Observation 推理链路
+- **Tool Call 循环**：基于 OpenAI Tool Call 协议的原生工具调用
 - **多模型支持**：DeepSeek (Chat/Reasoner)、Kilo (GPT-4o、Claude 等)
 - **工具系统**：基于 `@tool` 装饰器自动注册
 - **任务管理**：多步骤任务规划与状态跟踪
@@ -48,7 +50,7 @@ http://localhost:9090
 
 ```
 app/
-├── agent.py          # ReAct 循环实现
+├── agent.py          # Tool Call 循环实现
 ├── client.py        # LLM 客户端（OpenAI 兼容）
 ├── registry.py     # 工具注册表
 ├── todo_manager.py # Todo 状态管理
@@ -58,6 +60,7 @@ app/
 │   ├── write_file.py
 │   ├── edit_file.py
 │   ├── bash.py
+│   ├── web_fetch.py
 │   └── todo.py
 ├── prompts/       # Prompt 模板
 │   └── system.md

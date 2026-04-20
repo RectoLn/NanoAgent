@@ -23,24 +23,33 @@ def write_file(raw_input: str) -> str:
 
     abs_path = os.path.abspath(file_path)
 
-    # 自动创建父目录
+    # 自动创建父目录，并对新建目录设置 777
     parent = os.path.dirname(abs_path)
     try:
         if parent and not os.path.isdir(parent):
             os.makedirs(parent, exist_ok=True)
+            # 对所有新建的目录逐级 chmod 777
+            p = parent
+            while p and p != "/":
+                try:
+                    os.chmod(p, 0o777)
+                except Exception:
+                    pass
+                if os.path.dirname(p) == p:
+                    break
+                p = os.path.dirname(p)
     except Exception as e:
         return f"创建父目录失败: {e}"
 
     try:
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
-        # 统一放开权限，便于宿主机用户（如 VS Code）后续编辑
+        # 文件权限 666（宿主机可读写，不可执行）
         try:
-            os.chmod(abs_path, 0o777)
+            os.chmod(abs_path, 0o666)
         except Exception as chmod_err:
-            # chmod 失败不影响写入本身，仅提示
-            print(f"[write_file] chmod 0o777 失败（忽略）: {chmod_err}")
+            print(f"[write_file] chmod 0o666 失败（忽略）: {chmod_err}")
         size = os.path.getsize(abs_path)
-        return f"✅ 已写入 {abs_path}（{size} 字节，{len(content)} 字符，权限 0o777）"
+        return f"✅ 已写入 {abs_path}（{size} 字节，{len(content)} 字符，权限 0o666）"
     except Exception as e:
         return f"写入文件失败: {e}"

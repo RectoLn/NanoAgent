@@ -1,15 +1,21 @@
 """
-FastAPI 服务：暴露 ReAct Agent 为 HTTP 接口。
+FastAPI 服务：暴露 ToolCallAgent 为 HTTP 接口。
 
 端点：
   POST /chat         阻塞式，一次返回完整结果
-  GET  /chat/stream  SSE 流式，推送每步的 Thought/Action/Observation
+  GET  /chat/stream  SSE 流式，推送每步的工具调用/结果/最终答案
   GET  /             返回静态前端页面
   GET  /health       健康检查
 
-设计原则：
-  - 无状态：每次请求新建 ReActAgent（但 LLM 客户端全局复用）
-  - 极简依赖：只引入 fastapi + uvicorn
+SSE 事件类型：
+  question        用户问题
+  tool_call       模型发起工具调用  {name, input_preview, call_id}
+  observation     工具执行结果      {content, call_id}
+  todo_update     todo 列表快照     {items}
+  answer_chunk    最终答案流式token {content}
+  final           最终答案完整文本  {content}
+  error           错误             {content}
+  done            结束
 """
 
 import json

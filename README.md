@@ -1,4 +1,4 @@
-# NanoAgent v0.1
+# NanoAgent v0.2
 
 A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
 
@@ -6,7 +6,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
 
 ## Features
 
-- **ReAct Loop**: Thought → Action → Observation cycle
+- **Tool Call Loop**: Native tool calling based on OpenAI Tool Call protocol
 - **Multi-Provider LLM Support**: DeepSeek (Chat/Reasoner), Kilo (GPT-4o, Claude, etc.)
 - **Tool System**: Auto-registered tools with `@tool` decorator
 - **Todo Management**: Multi-step task planning and tracking
@@ -50,7 +50,7 @@ http://localhost:9090
 
 ```
 app/
-├── agent.py          # ReAct loop implementation
+├── agent.py          # Tool Call loop implementation
 ├── client.py        # LLM client (OpenAI compatible)
 ├── registry.py     # Tool registry
 ├── todo_manager.py # Todo state management
@@ -60,6 +60,7 @@ app/
 │   ├── write_file.py
 │   ├── edit_file.py
 │   ├── bash.py
+│   ├── web_fetch.py
 │   └── todo.py
 ├── prompts/       # Prompt templates
 │   └── system.md

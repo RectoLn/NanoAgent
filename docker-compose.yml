@@ -9,7 +9,4 @@ services:
       - .env
     ports:
       - "9090:9090"           # 暴露 FastAPI 服务端口到宿主机
-    tty: true
-    stdin_open: true
-    command: /bin/bash
     restart: always

@@ -24,4 +24,4 @@ RUN pip install --no-cache-dir \
 EXPOSE 9090
 
 # 默认启动命令
-CMD ["python", "main.py"]
+CMD ["python", "server.py"]
