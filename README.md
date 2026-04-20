@@ -2,7 +2,7 @@
 
 A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
 
-> �简体中文：[README_zh.md](./README_zh.md)
+> 简体中文：[README_zh.md](./README_zh.md)
 
 ## Features
 
