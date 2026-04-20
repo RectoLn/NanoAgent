@@ -2,10 +2,16 @@
 FastAPI 服务：暴露 ToolCallAgent 为 HTTP 接口。
 
 端点：
-  POST /chat         阻塞式，一次返回完整结果
-  GET  /chat/stream  SSE 流式，推送每步的工具调用/结果/最终答案
-  GET  /             返回静态前端页面
-  GET  /health       健康检查
+  POST /chat                   阻塞式，一次返回完整结果
+  GET  /chat/stream            SSE 流式，推送每步的工具调用/结果/最终答案
+  GET  /                       返回静态前端页面
+  GET  /health                 健康检查
+
+  # 会话管理
+  GET  /sessions               列出所有会话摘要
+  POST /sessions               新建会话，返回 session_id
+  GET  /sessions/{sid}         获取会话完整历史
+  DELETE /sessions/{sid}       删除会话
 
 SSE 事件类型：
   question        用户问题
@@ -14,6 +20,7 @@ SSE 事件类型：
   todo_update     todo 列表快照     {items}
   answer_chunk    最终答案流式token {content}
   final           最终答案完整文本  {content}
+  session_id      当前会话ID        {session_id}
   error           错误             {content}
   done            结束
 """
@@ -21,8 +28,9 @@ SSE 事件类型：
 import json
 import os
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Path as FPath
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,10 +41,11 @@ load_dotenv()
 
 from client import HelloAgentsLLM
 from agent import ReActAgent
+from session_manager import SESSION_MGR
 import tools  # noqa: F401 触发工具自动注册
 
 # --- FastAPI 应用 ---
-app = FastAPI(title="ReAct Agent API", version="0.1")
+app = FastAPI(title="ReAct Agent API", version="0.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,8 +63,14 @@ if _STATIC_DIR.is_dir():
 # --- 数据模型 ---
 class ChatRequest(BaseModel):
     question: str
-    provider: str = "kilo"  # 默认 kilo
-    model_id: str = ""  # 空字符串时用默认模型
+    provider: str = "kilo"
+    model_id: str = ""
+    session_id: Optional[str] = None  # 若提供，则续接已有会话
+
+
+class NewSessionRequest(BaseModel):
+    provider: str = "kilo"
+    model_id: str = ""
 
 
 # --- 工具函数 ---
@@ -70,7 +85,6 @@ def _get_llm_config(provider: str, model_id: str = "") -> dict:
         base_url = os.getenv("KILO_BASE_URL", os.getenv("LLM_BASE_URL"))
         model = model_id or os.getenv("KILO_MODEL_ID", os.getenv("LLM_MODEL_ID"))
     else:
-        # 默认 kilo
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
         model = model_id or os.getenv("LLM_MODEL_ID")
@@ -82,7 +96,7 @@ def _get_llm_config(provider: str, model_id: str = "") -> dict:
 
 
 def _new_agent(provider: str = "kilo", model_id: str = "") -> ReActAgent:
-    """每次请求新建 Agent 实例（无状态）。"""
+    """每次请求新建 Agent 实例。"""
     config = _get_llm_config(provider, model_id)
     llm = HelloAgentsLLM(**config)
     return ReActAgent(llm=llm)
@@ -111,7 +125,7 @@ def get_todo():
 
 
 @app.get("/meta")
-def meta(provider: str = Query("kilo", description="模型提供商"), model_id: str = Query("", description="模型 ID")):
+def meta(provider: str = Query("kilo"), model_id: str = Query("")):
     """返回当前配置元信息，供前端展示状态栏。"""
     try:
         config = _get_llm_config(provider, model_id)
@@ -119,38 +133,95 @@ def meta(provider: str = Query("kilo", description="模型提供商"), model_id:
     except ValueError as e:
         model_name = f"⚠️ {e}"
     ctx_len = int(os.getenv("LLM_CTX_LEN", "32768"))
-    return {
-        "model_id": model_name,
-        "ctx_len": ctx_len,
-    }
+    return {"model_id": model_name, "ctx_len": ctx_len}
 
+
+# ───────────────────── 会话管理端点 ─────────────────────
+
+@app.get("/sessions")
+def list_sessions():
+    """列出所有会话摘要（倒序）。"""
+    return {"sessions": SESSION_MGR.list_sessions()}
+
+
+@app.post("/sessions")
+def create_session(req: NewSessionRequest):
+    """显式新建空会话，返回 session_id。"""
+    agent = _new_agent(req.provider, req.model_id)
+    session = SESSION_MGR.create(system_prompt=agent.system_prompt)
+    return {"session_id": session.session_id, "title": session.title}
+
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str = FPath(...)):
+    """获取指定会话的完整消息历史。"""
+    session = SESSION_MGR.get(session_id)
+    if not session:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    return session.history_to_dict()
+
+
+@app.delete("/sessions/{session_id}")
+def delete_session(session_id: str = FPath(...)):
+    """删除指定会话。"""
+    ok = SESSION_MGR.delete(session_id)
+    if not ok:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    return {"ok": True}
+
+
+# ───────────────────── 对话端点 ─────────────────────
 
 @app.post("/chat")
 def chat(req: ChatRequest):
     """
     阻塞式对话：调用 agent.run，一次返回完整结果。
+    支持 session_id 续接多轮对话。
     """
     if not req.question or not req.question.strip():
         return JSONResponse({"error": "question 不能为空"}, status_code=400)
 
     agent = _new_agent(req.provider, req.model_id)
+
+    # 会话：获取或新建
+    session = SESSION_MGR.get_or_create(req.session_id, system_prompt=agent.system_prompt)
+    history = session.get_messages_for_llm()
+
     try:
-        answer = agent.run(req.question)
+        new_msgs: list = []
+        final_answer = ""
+        for event in agent.run_iter(req.question, history=history):
+            if event["type"] == "final":
+                final_answer = event["content"]
+            elif event["type"] == "new_messages":
+                new_msgs = event["messages"]
     except Exception as e:
         return JSONResponse({"error": f"Agent 执行失败: {e}"}, status_code=500)
 
-    return {"question": req.question, "answer": answer}
+    # 保存本轮新消息到 session
+    for msg in new_msgs:
+        session.add_message(msg)
+
+    # 保存 session 到文件
+    SESSION_MGR._save_session(session.session_id)
+
+    return {
+        "session_id": session.session_id,
+        "question": req.question,
+        "answer": final_answer,
+    }
 
 
 @app.get("/chat/stream")
 def chat_stream(
     question: str = Query(..., description="用户问题"),
-    provider: str = Query("kilo", description="模型提供商"),
-    model_id: str = Query("", description="模型 ID"),
+    provider: str = Query("kilo"),
+    model_id: str = Query(""),
+    session_id: str = Query("", description="会话ID，为空则新建会话"),
 ):
     """
-    流式对话（Server-Sent Events）：
-    每一步的 Thought / Action / Observation 作为独立事件推送给前端。
+    流式对话（Server-Sent Events）。
+    支持 session_id 续接多轮对话；若为空则自动新建会话。
 
     前端用 EventSource 订阅本端点即可。
     """
@@ -159,23 +230,41 @@ def chat_stream(
 
     agent = _new_agent(provider, model_id)
 
+    # 会话：获取或新建
+    sid = session_id.strip() or None
+    session = SESSION_MGR.get_or_create(sid, system_prompt=agent.system_prompt)
+    history = session.get_messages_for_llm()
+
     def event_gen():
+        # 首先推送当前 session_id 给前端
+        yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
+
         try:
-            for event in agent.run_iter(question):
+            for event in agent.run_iter(question, history=history):
+                if event["type"] == "new_messages":
+                    # 保存本轮新消息到 session（不推给前端）
+                    for msg in event["messages"]:
+                        session.add_message(msg)
+                    continue
+                elif event["type"] == "todo_update":
+                    # 更新 session.tasks
+                    session.tasks = event["items"]
                 payload = json.dumps(event, ensure_ascii=False)
-                # SSE 协议：每条消息以 "data: ...\n\n" 结尾
                 yield f"data: {payload}\n\n"
         except Exception as e:
             err = json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)
             yield f"data: {err}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        finally:
+            # 无论正常结束还是客户端断开，都保存当前状态
+            SESSION_MGR._save_session(session.session_id)
 
     return StreamingResponse(
         event_gen(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            "X-Accel-Buffering": "no",
         },
     )
 

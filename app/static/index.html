@@ -3,534 +3,651 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hello Agents</title>
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<title>Nano Agents</title>
+<script src="/static/vue.global.prod.js"></script>
+<script src="/static/marked.min.js"></script>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    height: 100%;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-    background: #ffffff;
-    color: #2d2d2d;
-    font-size: 15px;
-  }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  background: #fff;
+  color: #2d2d2d;
+  font-size: 15px;
+}
 
-  #app { min-height: 100vh; display: flex; flex-direction: column; }
+/* ─── 根容器 ─────────────────────────────── */
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-  /* ===== Landing ===== */
-  .landing {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    padding: 40px 24px; max-width: 760px; margin: 0 auto; width: 100%;
-  }
-  .landing h1 { font-size: 38px; font-weight: 600; color: #2d2d2d; margin-bottom: 10px; letter-spacing: -0.5px; }
-  .landing .subtitle { font-size: 16px; color: #8b8b8b; margin-bottom: 32px; }
+/* ─── 三列主布局 ─────────────────────────── */
+.app-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
 
-  .status-bar { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 28px; flex-wrap: wrap; }
-  .status-pill {
-    display: inline-flex; align-items: center; gap: 8px;
-    background: #f3f4f6; border-radius: 999px; padding: 8px 16px;
-    font-size: 13px; color: #4b5563;
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-  }
-  .status-pill .icon { width: 14px; height: 14px; display: inline-flex; align-items: center; color: #6b7280; }
-  .model-select {
-    background: transparent; border: none; color: #4b5563;
-    font-family: inherit; font-size: 13px; cursor: pointer;
-    outline: none;
-  }
-  .model-select:focus { color: #111827; }
+/* ─── 左栏：会话历史 ─────────────────────── */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #f0f0f0;
+  background: #fafafa;
+  overflow: hidden;
+  transition: width .22s ease;
+}
+.sidebar.collapsed { width: 36px; }
 
-  /* ===== Composer ===== */
-  .composer {
-    width: 100%; max-width: 720px; margin: 0 auto; position: relative;
-    background: #ffffff; border: 1px solid #e5e7eb; border-radius: 24px;
-    padding: 14px 16px 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-    transition: border-color .15s, box-shadow .15s;
-  }
-  .composer:focus-within { border-color: #d1d5db; box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
-  .composer.large { min-height: 140px; }
-  .composer textarea {
-    width: 100%; border: none; outline: none; resize: none;
-    font-family: inherit; font-size: 15px; color: #2d2d2d;
-    line-height: 1.6; padding: 4px 0 40px 0; background: transparent;
-  }
-  .composer.large textarea { min-height: 88px; }
-  .composer textarea::placeholder { color: #9ca3af; }
-  .composer .bottom-row {
-    position: absolute; left: 16px; right: 16px; bottom: 12px;
-    display: flex; justify-content: space-between; align-items: center;
-  }
-  .icon-btn {
-    width: 32px; height: 32px; border-radius: 50%; border: none;
-    background: transparent; color: #6b7280; cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    transition: background .15s, color .15s;
-  }
-  .icon-btn:hover { background: #f3f4f6; color: #374151; }
-  .send-btn {
-    width: 34px; height: 34px; border-radius: 50%; border: none;
-    background: #2d2d2d; color: #ffffff; cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    transition: background .15s, opacity .15s, transform .1s;
-  }
-  .send-btn:hover:not(:disabled) { background: #000; }
-  .send-btn:active:not(:disabled) { transform: scale(0.95); }
-  .send-btn:disabled { background: #d1d5db; cursor: not-allowed; }
+/* 折叠后显示的细栏（v-show 控制）*/
+.sidebar-strip {
+  width: 36px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0 0;
+  gap: 8px;
+  background: #fafafa;
+  border-right: 1px solid #f0f0f0;
+}
 
-  .hint { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 14px; }
-  .hint code {
-    background: #f3f4f6; padding: 2px 6px; border-radius: 4px;
-    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: #4b5563;
-  }
+.sidebar-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: opacity .18s ease;
+  padding: 0 10px 10px;
+}
 
-  /* ===== Chat 布局（单栏）===== */
-  .chat-layout {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    max-width: 760px;
-    margin: 0 auto;
-    width: 100%;
-    padding: 20px 24px;
-  }
-  @media (max-width: 900px) {
-    .todo-panel { display: none !important; }
-  }
+.sidebar-header {
+  padding: 14px 0 10px;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sidebar-title { font-size: 12px; font-weight: 600; color: #6b7280; letter-spacing: 0.3px; height: 28px; line-height: 28px; }
+.new-chat-btn {
+  width: 100%; padding: 7px 10px; border-radius: 7px;
+  background: #2d2d2d; color: #fff; font-size: 13px;
+  border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: background .15s;
+}
+.new-chat-btn:hover { background: #000; }
+.new-chat-btn:disabled { opacity: .5; cursor: not-allowed; }
+.session-list { flex: 1; overflow-y: auto; padding: 10px 0; }
+.session-list::-webkit-scrollbar { width: 3px; }
+.session-list::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 2px; }
+.session-empty { font-size: 12px; color: #ccc; font-style: italic; text-align: center; padding: 20px 0; }
+.session-item {
+  padding: 10px 8px; border-radius: 7px; cursor: pointer;
+  transition: background .12s; margin-bottom: 4px;
+  border: 1px solid transparent;
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.session-item:hover { background: #f0f0f0; }
+.session-item.active { background: #fff; border-color: #e5e7eb; }
+.session-item-text { flex: 1; min-width: 0; }
+.session-item-title {
+  font-size: 12.5px; color: #2d2d2d; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-item.active .session-item-title { color: #111; }
+.session-item-meta { font-size: 11px; color: #aaa; margin-top: 1px; }
+.session-del {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 4px;
+  border: none; background: transparent; color: #ccc; cursor: pointer;
+  display: none; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1; transition: color .12s, background .12s;
+}
+.session-item:hover .session-del { display: inline-flex; }
+.session-del:hover { color: #ef4444; background: #fee2e2; }
 
-  .chat-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+/* ─── 中栏：对话主体 ─────────────────────── */
+.chat-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-  .chat-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding-bottom: 12px; border-bottom: 1px solid #f3f4f6; margin-bottom: 12px;
-  }
-  .chat-header h2 { font-size: 16px; font-weight: 600; color: #2d2d2d; }
-  .chat-header button {
-    background: transparent; border: 1px solid #e5e7eb; color: #6b7280;
-    font-size: 13px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
-  }
-  .chat-header button:hover { background: #f9fafb; border-color: #d1d5db; }
+/* Landing 页（初始状态） */
+.landing {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 40px 24px; overflow-y: auto;
+}
+.landing h1 { font-size: 36px; font-weight: 600; color: #2d2d2d; margin-bottom: 8px; letter-spacing: -.5px; }
+.landing .subtitle { font-size: 15px; color: #9ca3af; margin-bottom: 28px; }
+.status-bar { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #f3f4f6; border-radius: 999px; padding: 7px 14px;
+  font-size: 13px; color: #4b5563;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+.model-select {
+  background: transparent; border: none; color: #4b5563;
+  font-family: inherit; font-size: 13px; cursor: pointer; outline: none;
+}
+.model-select:focus { color: #111; }
 
-  .chat-body {
-    flex: 1; overflow-y: auto; padding: 4px 0 16px;
-    display: flex; flex-direction: column; gap: 12px;
-  }
-  .chat-body::-webkit-scrollbar { width: 6px; }
-  .chat-body::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
+/* 输入框 */
+.composer {
+  width: 100%; max-width: 700px; margin: 0 auto; position: relative;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 22px;
+  padding: 12px 14px 10px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  transition: border-color .15s, box-shadow .15s;
+  flex-shrink: 0;
+}
+.composer:focus-within { border-color: #d1d5db; box-shadow: 0 4px 14px rgba(0,0,0,.06); }
+.composer.large { min-height: 130px; }
+.composer textarea {
+  width: 100%; border: none; outline: none; resize: none;
+  font-family: inherit; font-size: 15px; color: #2d2d2d;
+  line-height: 1.6; padding: 2px 0 38px 0; background: transparent;
+}
+.composer.large textarea { min-height: 80px; }
+.composer textarea::placeholder { color: #9ca3af; }
+.composer .bottom-row {
+  position: absolute; left: 14px; right: 14px; bottom: 10px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.hint { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 12px; }
+.hint code {
+  background: #f3f4f6; padding: 2px 6px; border-radius: 4px;
+  font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: #4b5563;
+}
 
-  /* ===== 用户气泡 ===== */
-  .bubble-question {
-    align-self: flex-end; max-width: 85%;
-    padding: 10px 14px; border-radius: 14px;
-    background: #f3f4f6; color: #2d2d2d; font-size: 14px; line-height: 1.6;
-    white-space: pre-wrap; word-break: break-word;
-  }
+/* Chat 视图 */
+.chat-view {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  max-width: 760px; margin: 0 auto; width: 100%;
+  padding: 18px 22px;
+}
+.chat-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding-bottom: 11px; border-bottom: 1px solid #f3f4f6; margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.chat-header h2 {
+  font-size: 15px; font-weight: 600; color: #2d2d2d;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;
+}
+.chat-header-right { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.header-btn {
+  background: transparent; border: 1px solid #e5e7eb; color: #6b7280;
+  font-size: 13px; padding: 5px 11px; border-radius: 7px; cursor: pointer;
+  white-space: nowrap; transition: background .12s;
+}
+.header-btn:hover { background: #f9fafb; border-color: #d1d5db; }
+.header-btn:disabled { opacity: .5; cursor: not-allowed; }
 
-  /* ===== Step 轮次卡片（核心）===== */
-  .step-card {
-    background: #fafafa;
-    border: 1px solid #efefef;
-    border-radius: 10px;
-    overflow: hidden;
-    transition: border-color .15s, background .15s;
-  }
-  .step-card:hover { border-color: #e5e5e5; }
-  .step-card.running { background: #f7f7f7; border-color: #e0e0e0; }
-  .step-card.expanded { background: #ffffff; border-color: #e5e7eb; }
+.chat-body {
+  flex: 1; min-height: 120px; overflow-y: auto;
+  padding: 4px 0 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.chat-body::-webkit-scrollbar { width: 5px; }
+.chat-body::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
 
-  .step-header {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 14px; cursor: pointer; user-select: none;
-  }
-  .step-caret {
-    display: inline-block; width: 10px; height: 10px; flex-shrink: 0;
-    color: #9ca3af; transition: transform .15s;
-  }
-  .step-card.expanded .step-caret { transform: rotate(90deg); }
+/* 按钮 */
+.icon-btn {
+  width: 30px; height: 30px; border-radius: 50%; border: none;
+  background: transparent; color: #6b7280; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .15s, color .15s;
+}
+.icon-btn:hover { background: #f3f4f6; color: #374151; }
+.send-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: none;
+  background: #2d2d2d; color: #fff; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .15s, transform .1s;
+}
+.send-btn:hover:not(:disabled) { background: #000; }
+.send-btn:active:not(:disabled) { transform: scale(.95); }
+.send-btn:disabled { background: #d1d5db; cursor: not-allowed; }
 
-  .step-num {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    color: #9ca3af; font-weight: 500; font-size: 11px;
-    flex-shrink: 0;
-  }
-  .step-title {
-    flex: 1; min-width: 0;
-    font-size: 13px; color: #4b5563;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .step-title .tool {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    color: #1f2937; font-weight: 500;
-  }
-  .step-status {
-    flex-shrink: 0; font-size: 10px; padding: 2px 7px; border-radius: 10px;
-    font-weight: 500;
-  }
-  .step-status.running {
-    background: #e5e5e5; color: #4b5563;
-    animation: pulse 1.4s ease-in-out infinite;
-  }
-  .step-status.done { background: #f0f0f0; color: #9ca3af; }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
+/* ─── 消息气泡 ────────────────────────────── */
+.bubble-question {
+  align-self: flex-end; max-width: 85%;
+  padding: 9px 13px; border-radius: 13px;
+  background: #f3f4f6; color: #2d2d2d;
+  font-size: 14px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+  flex-shrink: 0;
+}
 
-  .step-body {
-    display: none;
-    border-top: 1px solid #efefef;
-  }
-  .step-card.expanded .step-body { display: block; }
+/* ─── 轮次分隔 ───────────────────────────── */
+.turn-divider {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0; flex-shrink: 0;
+}
+.turn-divider::before,.turn-divider::after { content:''; flex:1; height:1px; background:#f0f0f0; }
+.turn-divider span { font-size: 10px; color: #d1d5db; white-space: nowrap; }
 
-  /* --- 子区块 --- */
-  .step-block { padding: 12px 14px; }
-  .step-block + .step-block { border-top: 1px solid #f3f3f3; }
-  .step-block .label {
-    font-size: 10px; color: #9ca3af; font-weight: 600;
-    letter-spacing: 0.6px; margin-bottom: 6px; text-transform: uppercase;
-  }
+/* ─── Tool Call 卡片 ─────────────────────── */
+.step-card {
+  background: #fafafa; border: 1px solid #efefef; border-radius: 9px;
+  overflow: hidden; transition: border-color .15s;
+  flex-shrink: 0;
+}
+.step-card:hover { border-color: #e5e5e5; }
+.step-card.running { border-color: #e0e0e0; }
+.step-card.expanded { background: #fff; border-color: #e5e7eb; }
 
-  /* Thought 子块（视觉焦点）*/
-  .step-block.thought .label::before { content: "💭 "; }
-  .step-block.thought .content {
-    font-size: 14px; color: #1f2937; line-height: 1.7;
-    white-space: pre-wrap; word-break: break-word;
-  }
+.step-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; cursor: pointer; user-select: none;
+}
+.step-caret {
+  width: 9px; height: 9px; flex-shrink: 0;
+  color: #9ca3af; transition: transform .15s;
+}
+.step-card.expanded .step-caret { transform: rotate(90deg); }
+.step-num { font-family: "SF Mono", Menlo, monospace; color: #9ca3af; font-size: 11px; flex-shrink: 0; }
+.step-title { flex: 1; min-width: 0; font-size: 13px; color: #4b5563; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-title .tool { font-family: "SF Mono", Menlo, monospace; color: #1f2937; font-weight: 500; }
+.step-status { flex-shrink: 0; font-size: 10px; padding: 2px 7px; border-radius: 9px; font-weight: 500; }
+.step-status.running { background: #e5e5e5; color: #4b5563; animation: blink 1.4s ease-in-out infinite; }
+.step-status.done { background: #f0f0f0; color: #9ca3af; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-  /* Action 子块 */
-  .step-block.action .label::before { content: "🔧 "; }
-  .step-block.action .content {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px; color: #4b5563; line-height: 1.55;
-    white-space: pre-wrap; word-break: break-word;
-    max-height: 200px; overflow-y: auto;
-  }
-  .step-block.action .tool-name {
-    color: #d97706; font-weight: 600;
-  }
+.step-body { display: none; border-top: 1px solid #efefef; }
+.step-card.expanded .step-body { display: block; }
+.step-block { padding: 10px 12px; }
+.step-block + .step-block { border-top: 1px solid #f3f3f3; }
+.step-block .label {
+  font-size: 10px; color: #9ca3af; font-weight: 600;
+  letter-spacing: .6px; margin-bottom: 5px; text-transform: uppercase;
+}
+.step-block.action .label::before { content: "🔧 "; }
+.step-block.action .content {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 12px; color: #4b5563; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 300px; min-height: 1.6em; overflow-y: auto;
+}
+.step-block.action .tool-name { color: #d97706; font-weight: 600; }
+.step-block.observation .label::before { content: "📎 "; }
+.step-block.observation .content {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 12px; color: #4b5563; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 400px; min-height: 1.6em; overflow-y: auto; padding-right: 4px;
+}
+.step-block.observation.terminal .content {
+  background: #1a1a1a; color: #e5e5e5;
+  padding: 10px 12px; border-radius: 5px;
+}
+.step-block .content::-webkit-scrollbar { width: 5px; }
+.step-block .content::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 3px; }
 
-  /* Observation 子块 */
-  .step-block.observation .label::before { content: "📎 "; }
-  .step-block.observation .content {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px; color: #4b5563; line-height: 1.55;
-    white-space: pre-wrap; word-break: break-word;
-    max-height: 300px; overflow-y: auto;
-    padding-right: 4px;
-  }
+/* ─── 最终答案 ───────────────────────────── */
+.bubble-final {
+  padding: 16px 18px; border-radius: 11px;
+  background: #fff; border: 1px solid #e5e7eb;
+  color: #111827; font-size: 15px; line-height: 1.75;
+  box-shadow: 0 2px 8px rgba(0,0,0,.05);
+  word-break: break-word; flex-shrink: 0;
+}
+.bubble-final .answer-label { display: block; font-size: 10px; color: #10b981; font-weight: 700; margin-bottom: 8px; letter-spacing: 1px; }
+.bubble-final .md-content code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; font-family: "SF Mono", Menlo, monospace; font-size: 13px; }
+.bubble-final .md-content pre { background: #1a1a1a; color: #e5e5e5; padding: 12px; border-radius: 7px; overflow-x: auto; margin: 8px 0; }
+.bubble-final .md-content pre code { background: transparent; padding: 0; color: inherit; }
+.bubble-final .md-content p { margin: 7px 0; }
+.bubble-final .md-content p:first-child { margin-top: 0; }
+.bubble-final .md-content p:last-child { margin-bottom: 0; }
+.bubble-final .md-content ul,.bubble-final .md-content ol { padding-left: 18px; margin: 7px 0; }
+.bubble-final .md-content li { margin: 3px 0; }
+.bubble-final .md-content h1,.bubble-final .md-content h2,.bubble-final .md-content h3 { font-weight: 600; margin: 12px 0 6px; }
+.bubble-final .md-content h1 { font-size: 19px; }
+.bubble-final .md-content h2 { font-size: 16px; }
+.bubble-final .md-content h3 { font-size: 14px; }
+.bubble-final .md-content blockquote { border-left: 3px solid #e5e7eb; padding-left: 10px; color: #6b7280; margin: 7px 0; }
+.bubble-final .md-content a { color: #2563eb; text-decoration: underline; }
+.bubble-final .md-content table { border-collapse: collapse; margin: 7px 0; }
+.bubble-final .md-content th,.bubble-final .md-content td { border: 1px solid #e5e7eb; padding: 5px 9px; }
 
-  /* Bash 终端样式 */
-  .step-block.observation.terminal .content {
-    background: #1a1a1a; color: #e5e5e5;
-    padding: 12px 14px; border-radius: 6px;
-  }
-  .step-block.observation.terminal .content::-webkit-scrollbar-thumb {
-    background: #404040;
-  }
-  .step-block.observation.terminal .content::-webkit-scrollbar-track {
-    background: #262626;
-  }
+.bubble-error {
+  padding: 9px 13px; border-radius: 9px; flex-shrink: 0;
+  background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 13px;
+}
 
-  /* 普通滚动条 */
-  .step-block .content::-webkit-scrollbar { width: 6px; }
-  .step-block .content::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 3px; }
+/* ─── 右栏：任务面板 ────────────────────── */
+.todo-col {
+  width: 220px;
+  flex-shrink: 0;
+  border-left: 1px solid #f0f0f0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+  transition: width .22s ease;
+}
+.todo-col.collapsed { width: 36px; }
 
-  /* 正在流式输出中的 thought 指示 */
-  .streaming-dot {
-    display: inline-block; width: 6px; height: 6px;
-    background: #6b7280; border-radius: 50%;
-    animation: pulse 1s ease-in-out infinite;
-    margin-left: 4px; vertical-align: middle;
-  }
+.todo-strip {
+  width: 40px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0 0;
+  background: #fff;
+  border-left: 1px solid #f0f0f0;
+}
 
-  /* ===== Final Answer ===== */
-  .bubble-final {
-    padding: 18px 20px; border-radius: 12px;
-    background: #ffffff; border: 1px solid #e5e7eb;
-    color: #111827; font-size: 15px; line-height: 1.75;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    margin-top: 4px;
-    word-break: break-word;
-  }
-  .bubble-final .answer-label {
-    display: block;
-    font-size: 10px; color: #10b981; font-weight: 700;
-    margin-bottom: 10px; letter-spacing: 1px;
-  }
-  .bubble-final .md-content code {
-    background: #f3f4f6; padding: 2px 6px; border-radius: 4px;
-    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px;
-  }
-  .bubble-final .md-content pre {
-    background: #1a1a1a; color: #e5e5e5; padding: 14px; border-radius: 8px;
-    overflow-x: auto; margin: 10px 0;
-  }
-  .bubble-final .md-content pre code {
-    background: transparent; padding: 0; color: inherit;
-  }
-  .bubble-final .md-content p { margin: 8px 0; }
-  .bubble-final .md-content p:first-child { margin-top: 0; }
-  .bubble-final .md-content p:last-child { margin-bottom: 0; }
-  .bubble-final .md-content ul,
-  .bubble-final .md-content ol { padding-left: 20px; margin: 8px 0; }
-  .bubble-final .md-content li { margin: 4px 0; }
-  .bubble-final .md-content h1,
-  .bubble-final .md-content h2,
-  .bubble-final .md-content h3 {
-    font-weight: 600; margin: 14px 0 8px;
-  }
-  .bubble-final .md-content h1 { font-size: 20px; }
-  .bubble-final .md-content h2 { font-size: 17px; }
-  .bubble-final .md-content h3 { font-size: 15px; }
-  .bubble-final .md-content blockquote {
-    border-left: 3px solid #e5e7eb; padding-left: 12px;
-    color: #6b7280; margin: 8px 0;
-  }
-  .bubble-final .md-content a { color: #2563eb; text-decoration: underline; }
-  .bubble-final .md-content table {
-    border-collapse: collapse; margin: 8px 0;
-  }
-  .bubble-final .md-content th,
-  .bubble-final .md-content td {
-    border: 1px solid #e5e7eb; padding: 6px 10px;
-  }
+.todo-inner {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 12px 10px;
+}
+.todo-inner::-webkit-scrollbar { width: 3px; }
+.todo-inner::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 2px; }
+.todo-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: opacity .18s ease;
+  padding: 0 10px 10px;
+}
 
-  .bubble-error {
-    padding: 10px 14px; border-radius: 10px;
-    background: #fef2f2; border: 1px solid #fecaca;
-    color: #991b1b; font-size: 13px;
-  }
+.todo-inner {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 12px 0 12px;
+}
+.todo-inner::-webkit-scrollbar { width: 3px; }
+.todo-inner::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 2px; }
+.todo-heading {
+  font-size: 10.5px; color: #999; font-weight: 600;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  padding: 12px 0 8px;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0;
+  min-height: 28px;
+}
+.todo-heading > span:first-child { line-height: 28px; }
+.todo-heading .count { font-family: "SF Mono", Menlo, monospace; font-size: 10px; color: #ccc; font-weight: 400; }
+.todo-progress { height: 1.5px; background: #f0f0f0; overflow: hidden; margin: 9px 0 7px; }
+.todo-progress-bar { height: 100%; background: #333; transition: width .35s ease; }
+.todo-empty { font-size: 12px; color: #ccc; font-style: italic; text-align: center; padding: 16px 0; }
+.todo-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 0; line-height: 1.6; border-bottom: 1px solid #f7f7f7;
+  min-height: 36px;
+}
+.todo-item:last-child { border-bottom: none; }
+.todo-icon {
+  flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px;
+  display: flex; align-items: center; justify-content: center;
+}
+.todo-icon svg { display: block; }
+.todo-item .text { flex: 1; font-size: 12px; color: #444; }
+.todo-item.completed .text { color: #888; text-decoration: line-through; opacity: 0.7; }
+.todo-item.cancelled .text { color: #aaa; text-decoration: line-through; opacity: 0.6; }
+.todo-item.in_progress .text { color: #111; font-weight: 500; }
 
-  /* ===== Todo 面板（固定右上角）===== */
-  .todo-panel {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    width: 248px;
-    border: 1px solid #e8e8e8;
-    border-radius: 8px;
-    padding: 14px 14px 10px;
-    background: #fff;
-    max-height: calc(100vh - 40px);
-    overflow-y: auto;
-    z-index: 100;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
-  }
-  .todo-panel::-webkit-scrollbar { width: 3px; }
-  .todo-panel::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 2px; }
+/* 面板折叠按钮（通用样式） */
+.panel-toggle-btn {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid #e5e7eb;
+  background: #fff; color: #9ca3af; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s, border-color .12s;
+  flex-shrink: 0;
+}
+.panel-toggle-btn:hover { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
+.panel-toggle-btn svg { display: block; }
 
-  .todo-panel h3 {
-    font-size: 10.5px; color: #999; font-weight: 600;
-    letter-spacing: 1.2px; text-transform: uppercase;
-    margin-bottom: 0; padding-bottom: 10px;
-    border-bottom: 1px solid #f0f0f0;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .todo-panel .count {
-    font-family: "SF Mono", Menlo, monospace; font-size: 10px;
-    color: #ccc; font-weight: 400; letter-spacing: 0;
-  }
-  .todo-empty {
-    font-size: 12px; color: #ccc; font-style: italic;
-    text-align: center; padding: 18px 0;
-  }
-
-  /* 进度条 */
-  .todo-progress {
-    height: 1.5px; background: #f0f0f0;
-    overflow: hidden; margin: 10px 0 8px;
-  }
-  .todo-progress-bar {
-    height: 100%; background: #333;
-    transition: width .35s ease;
-  }
-
-  .todo-item {
-    display: flex; align-items: flex-start; gap: 8px;
-    padding: 6px 0; line-height: 1.5;
-    border-bottom: 1px solid #f7f7f7;
-  }
-  .todo-item:last-child { border-bottom: none; }
-
-  /* SVG 图标容器 */
-  .todo-icon {
-    flex-shrink: 0; width: 15px; height: 15px; margin-top: 1.5px;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .todo-icon svg { display: block; overflow: visible; }
-
-  .todo-item .text { flex: 1; font-size: 12.5px; color: #444; }
-  .todo-item.completed .text { color: #bbb; text-decoration: line-through; }
-  .todo-item.cancelled  .text { color: #ccc; text-decoration: line-through; opacity: .8; }
-  .todo-item.in_progress .text { color: #111; font-weight: 500; }
+/* ─── 响应式 ─────────────────────────────── */
+@media (max-width: 1100px) {
+  .todo-col { display: none; }
+}
+@media (max-width: 800px) {
+  .sidebar { display: none; }
+}
 </style>
 </head>
 <body>
-
 <div id="app">
-  <!-- ===== Landing ===== -->
-  <div v-if="!started" class="landing">
-    <h1>Nano_Agent</h1>
-    <div class="subtitle">A minimal ReAct Agent · Tool Call Mode</div>
+  <div class="app-layout">
 
-    <div class="status-bar">
-      <div class="status-pill">
-        <select v-model="selectedModel" class="model-select">
-          <option value="kilo:kilo-auto/free">Kilo Auto (Free)</option>
-          <option value="kilo:anthropic/claude-3-5-sonnet">Claude 3.5 Sonnet (Kilo)</option>
-          <option value="kilo:openai/gpt-4o">GPT-4o (Kilo)</option>
-          <option value="deepseek:deepseek-chat">DeepSeek-V3 Chat</option>
-          <option value="deepseek:deepseek-reasoner">DeepSeek-R1 Reasoner</option>
-        </select>
-      </div>
-      <div class="status-pill"><span>ctx: {{ ctxLen }}</span></div>
-    </div>
+    <!-- ══ 左栏：会话历史 ══ -->
+    <aside class="sidebar" :class="{ collapsed: !sidebarOpen }">
 
-    <div class="composer large">
-      <textarea v-model="question" ref="landingInput" @keydown="onKey" placeholder="Ask anything..." rows="3"></textarea>
-      <div class="bottom-row">
-        <button class="icon-btn" title="附件（暂未实现）">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-          </svg>
-        </button>
-        <button class="send-btn" @click="send" :disabled="!question.trim() || loading">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+      <!-- 折叠时显示的细栏 -->
+      <div v-show="!sidebarOpen" class="sidebar-strip">
+        <button class="panel-toggle-btn" @click="sidebarOpen = true" title="展开会话列表">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
           </svg>
         </button>
       </div>
-    </div>
-    <div class="hint">Press <code>Enter</code> to send, <code>Shift + Enter</code> for new line</div>
-  </div>
 
-  <!-- ===== Chat ===== -->
-  <div v-else class="chat-layout">
-    <!-- 左侧：主对话 -->
-    <div class="chat-main">
-      <div class="chat-header">
-        <h2>Hello Agents</h2>
-        <button @click="reset" :disabled="loading">New Chat</button>
-      </div>
-
-      <div class="chat-body" ref="chatBody">
-        <template v-for="(item, i) in timeline" :key="i">
-          <!-- 用户问题 -->
-          <div v-if="item.kind === 'question'" class="bubble-question">{{ item.content }}</div>
-
-          <!-- Tool Call 卡片 -->
+      <!-- 展开时显示的主内容 -->
+      <div v-show="sidebarOpen" class="sidebar-content">
+        <div class="sidebar-header">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div class="sidebar-title">会话历史</div>
+          <button class="panel-toggle-btn" @click="sidebarOpen = false" title="收起">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          </button>
+          </div>
+          <button class="new-chat-btn" @click="newChat" :disabled="loading">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            新对话
+          </button>
+        </div>
+        <div class="session-list">
+          <div v-if="sessions.length === 0" class="session-empty">暂无历史对话</div>
           <div
-            v-else-if="item.kind === 'step'"
-            :class="['step-card', { running: item.running, expanded: item.expanded }]"
+            v-for="s in sessions" :key="s.session_id"
+            :class="['session-item', { active: s.session_id === currentSessionId }]"
+            @click="switchSession(s.session_id)"
           >
-            <div class="step-header" @click="item.expanded = !item.expanded">
-              <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor">
-                <path d="M3 1 L7 5 L3 9 Z"/>
-              </svg>
-              <span class="step-num">#{{ item.step }}</span>
-              <span class="step-title">
-                <span class="tool">{{ item.action }}</span>
-                <span style="color:#9ca3af;"> · {{ truncate(item.input, 50) }}</span>
-              </span>
-              <span v-if="item.running" class="step-status running">running</span>
-              <span v-else class="step-status done">done</span>
+            <div class="session-item-text">
+              <div class="session-item-title">{{ s.title }}</div>
+              <div class="session-item-meta">{{ s.message_count }} 条消息</div>
             </div>
-
-            <div class="step-body">
-              <!-- Action (Tool Call) -->
-              <div class="step-block action">
-                <div class="label">Tool · <span class="tool-name">{{ item.action }}</span></div>
-                <div class="content">{{ item.input || '(no input)' }}</div>
-              </div>
-
-              <!-- Observation -->
-              <div
-                v-if="item.observation"
-                :class="['step-block', 'observation', { terminal: item.action === 'bash' }]"
-              >
-                <div class="label">Observation</div>
-                <div class="content">{{ item.observation }}</div>
-              </div>
-            </div>
+            <button class="session-del" @click.stop="deleteSession(s.session_id)" title="删除">×</button>
           </div>
-
-          <!-- Final Answer -->
-          <div v-else-if="item.kind === 'final'" class="bubble-final">
-            <span class="answer-label">✓ Answer</span>
-            <div class="md-content" v-html="renderMarkdown(item.content)"></div>
-          </div>
-
-          <!-- Error -->
-          <div v-else-if="item.kind === 'error'" class="bubble-error">❌ {{ item.content }}</div>
-        </template>
+        </div>
       </div>
 
-      <div class="composer">
-        <textarea
-          v-model="question" ref="chatInput" @keydown="onKey"
-          :disabled="loading"
-          :placeholder="loading ? 'Thinking...' : 'Ask anything...'"
-          rows="2"
-        ></textarea>
-        <div class="bottom-row">
-          <button class="icon-btn" title="附件（暂未实现）">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-            </svg>
-          </button>
-          <button class="send-btn" @click="send" :disabled="!question.trim() || loading">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
-            </svg>
-          </button>
+    </aside>
+
+    <!-- ══ 中栏：对话主体 ══ -->
+    <div class="chat-area">
+
+      <!-- Landing -->
+      <div v-if="!started" class="landing">
+        <h1>Nano_Agent</h1>
+        <div class="subtitle">A Minimal ReAct Agent · Tool Call Mode</div>
+        <div class="status-bar">
+          <div class="status-pill">
+            <select v-model="selectedModel" class="model-select">
+              <option value="kilo:kilo-auto/free">Kilo Auto (Free)</option>
+              <option value="kilo:anthropic/claude-3-5-sonnet">Claude 3.5 Sonnet (Kilo)</option>
+              <option value="kilo:openai/gpt-4o">GPT-4o (Kilo)</option>
+              <option value="deepseek:deepseek-chat">DeepSeek-V3 Chat</option>
+              <option value="deepseek:deepseek-reasoner">DeepSeek-R1 Reasoner</option>
+            </select>
+          </div>
+          <div class="status-pill"><span>ctx: {{ ctxLen }}</span></div>
+        </div>
+        <div class="composer large">
+          <textarea v-model="question" ref="landingInput" @keydown="onKey" placeholder="Ask anything..." rows="3"></textarea>
+          <div class="bottom-row">
+            <button class="icon-btn" title="附件（暂未实现）">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+            <button class="send-btn" @click="send" :disabled="!question.trim() || loading">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="hint">Press <code>Enter</code> to send, <code>Shift + Enter</code> for new line</div>
+      </div>
+
+      <!-- Chat -->
+      <div v-else class="chat-view">
+        <div class="chat-header">
+          <h2>{{ currentSessionTitle || 'Nano Agents' }}</h2>
+          <div class="chat-header-right">
+            <div class="status-pill" style="background:#f9fafb; padding:4px 11px;">
+              <select v-model="selectedModel" class="model-select" style="font-size:12px;">
+                <option value="kilo:kilo-auto/free">Kilo Auto</option>
+                <option value="kilo:anthropic/claude-3-5-sonnet">Claude 3.5</option>
+                <option value="kilo:openai/gpt-4o">GPT-4o</option>
+                <option value="deepseek:deepseek-chat">DeepSeek V3</option>
+                <option value="deepseek:deepseek-reasoner">DeepSeek R1</option>
+              </select>
+            </div>
+            <button class="header-btn" @click="newChat" :disabled="loading">新对话</button>
+          </div>
+        </div>
+
+        <div class="chat-body" ref="chatBody">
+          <template v-for="(item, i) in timeline" :key="i">
+            <div v-if="item.kind === 'divider'" class="turn-divider">
+              <span>第 {{ item.turn }} 轮</span>
+            </div>
+            <div v-else-if="item.kind === 'question'" class="bubble-question">{{ item.content }}</div>
+            <div v-else-if="item.kind === 'step'" :class="['step-card', { running: item.running, expanded: item.expanded }]">
+              <div class="step-header" @click="item.expanded = !item.expanded">
+                <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1 L7 5 L3 9 Z"/></svg>
+                <span class="step-num">#{{ item.step }}</span>
+                <span class="step-title">
+                  <span class="tool">{{ item.action }}</span>
+                  <span style="color:#9ca3af;"> · {{ truncate(item.input, 50) }}</span>
+                </span>
+                <span v-if="item.running" class="step-status running">running</span>
+                <span v-else class="step-status done">done</span>
+              </div>
+              <div class="step-body">
+                <div class="step-block action">
+                  <div class="label">Tool · <span class="tool-name">{{ item.action }}</span></div>
+                  <div class="content">{{ item.input || '(no input)' }}</div>
+                </div>
+                <div v-if="item.observation" :class="['step-block','observation',{terminal:item.action==='bash'}]">
+                  <div class="label">ToolResult</div>
+                  <div class="content">{{ item.observation }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="item.kind === 'final'" class="bubble-final">
+              <span class="answer-label">✓ Answer</span>
+              <div class="md-content" v-html="renderMarkdown(item.content)"></div>
+            </div>
+            <div v-else-if="item.kind === 'error'" class="bubble-error">❌ {{ item.content }}</div>
+          </template>
+        </div>
+
+        <div class="composer">
+          <textarea v-model="question" ref="chatInput" @keydown="onKey"
+            :disabled="loading"
+            :placeholder="loading ? 'Thinking...' : 'Ask anything...'"
+            rows="2"
+          ></textarea>
+          <div class="bottom-row">
+            <button class="icon-btn" title="附件（暂未实现）">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+            <button class="send-btn" @click="send" :disabled="!question.trim() || loading">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
 
-  </div>
+    <!-- ══ 右栏：任务面板（有任务时显示，支持折叠）══ -->
+    <div class="todo-col" v-show="todos.length > 0 || loading" :class="{ collapsed: !todoOpen }">
 
-  <!-- 固定右上角：Todo 面板 -->
-  <aside class="todo-panel" v-if="started && (todos.length > 0 || loading)">
-    <h3>
-      <span>Tasks</span>
-      <span class="count" v-if="todos.length">{{ completedCount }}/{{ todos.length }}</span>
-    </h3>
-    <div class="todo-progress" v-if="todos.length > 0">
-      <div class="todo-progress-bar" :style="{ width: progressPct + '%' }"></div>
-    </div>
-    <div v-if="todos.length === 0" class="todo-empty">尚未制定计划</div>
-    <div v-else>
-      <div
-        v-for="t in todos"
-        :key="t.id"
-        :class="['todo-item', t.status]"
-      >
-        <span class="todo-icon">
-          <!-- pending：空心方框 -->
-          <svg v-if="t.status === 'pending'" width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <rect x="1" y="1" width="11" height="11" rx="1" stroke="#c8c8c8" stroke-width="1.5"/>
+      <!-- 折叠时显示的细栏 -->
+      <div v-show="!todoOpen" class="todo-strip">
+        <button class="panel-toggle-btn" @click="todoOpen = true" title="展开任务列表">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
           </svg>
-          <!-- in_progress：方框 + 内部实心小方块 -->
-          <svg v-else-if="t.status === 'in_progress'" width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <rect x="1" y="1" width="11" height="11" rx="1" stroke="#555" stroke-width="1.5"/>
-            <rect x="4" y="4" width="5" height="5" rx="0.5" fill="#555"/>
-          </svg>
-          <!-- completed：方框 + 折线勾 -->
-          <svg v-else-if="t.status === 'completed'" width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <rect x="1" y="1" width="11" height="11" rx="1" fill="#2d2d2d"/>
-            <polyline points="3.5,7 5.5,9 9.5,4" stroke="#fff" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"/>
-          </svg>
-          <!-- cancelled：方框 + 横线 -->
-          <svg v-else-if="t.status === 'cancelled'" width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <rect x="1" y="1" width="11" height="11" rx="1" stroke="#ccc" stroke-width="1.5"/>
-            <line x1="4" y1="6.5" x2="9" y2="6.5" stroke="#ccc" stroke-width="1.5" stroke-linecap="square"/>
-          </svg>
-        </span>
-        <span class="text">{{ t.text }}</span>
+        </button>
       </div>
+
+      <!-- 展开时显示的主内容 -->
+      <div v-show="todoOpen" class="todo-content">
+        <div class="todo-heading">
+          <span>Tasks</span>
+          <div style="display:flex;align-items:center;gap:4px;">
+            <span class="count" v-if="todos.length">{{ completedCount }}/{{ todos.length }}</span>
+            <button class="panel-toggle-btn" @click="todoOpen = false" title="收起">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="todo-progress" v-if="todos.length > 0">
+          <div class="todo-progress-bar" :style="{ width: progressPct + '%' }"></div>
+        </div>
+        <div v-if="todos.length === 0" class="todo-empty">尚未制定计划</div>
+        <div v-else>
+          <div v-for="t in todos" :key="t.id" :class="['todo-item', t.status]">
+            <span class="todo-icon">
+              <svg v-if="t.status === 'pending'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <rect x="1" y="1" width="11" height="11" rx="1" stroke="#c8c8c8" stroke-width="1.5"/>
+              </svg>
+              <svg v-else-if="t.status === 'in_progress'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <rect x="1" y="1" width="11" height="11" rx="1" stroke="#555" stroke-width="1.5"/>
+                <rect x="4" y="4" width="5" height="5" rx="0.5" fill="#555"/>
+              </svg>
+              <svg v-else-if="t.status === 'completed'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <rect x="1" y="1" width="11" height="11" rx="1" fill="#2d2d2d"/>
+                <polyline points="3.5,7 5.5,9 9.5,4" stroke="#fff" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"/>
+              </svg>
+              <svg v-else-if="t.status === 'cancelled'" width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <rect x="1" y="1" width="11" height="11" rx="1" stroke="#ccc" stroke-width="1.5"/>
+                <line x1="4" y1="6.5" x2="9" y2="6.5" stroke="#ccc" stroke-width="1.5" stroke-linecap="square"/>
+              </svg>
+            </span>
+            <span class="text">{{ t.text }}</span>
+          </div>
+        </div>
+      </div>
+
     </div>
-  </aside>
+
+  </div>
 </div>
 
 <script>
@@ -538,193 +655,208 @@ const { createApp, ref, computed, nextTick, onMounted, reactive, watch } = Vue;
 
 createApp({
   setup() {
-    const question = ref('');
-    const timeline = reactive([]);
-    const todos = reactive([]);
-    const loading = ref(false);
-    const started = computed(() => timeline.length > 0);
+    const question      = ref('');
+    const timeline      = reactive([]);
+    const todos         = reactive([]);
+    const loading       = ref(false);
+    const sessions      = reactive([]);
+    const currentSessionId    = ref(null);
+    const currentSessionTitle = ref('');
+    const selectedModel = ref('kilo:kilo-auto/free');
+    const ctxLen        = ref('—');
+    let turnCount = 0;
 
-    const chatBody = ref(null);
+    // 面板折叠状态
+    const sidebarOpen = ref(true);
+    const todoOpen    = ref(true);
+
+    // 每个会话的 todos 缓存（session_id -> items[]）
+    const todoCache = {};
+
+    const chatBody    = ref(null);
     const landingInput = ref(null);
-    const chatInput = ref(null);
+    const chatInput   = ref(null);
 
-    const selectedModel = ref('kilo:kilo-auto/free'); // 默认 Kilo Auto
-    const modelId = ref('loading...');
-    const ctxLen = ref('—');
+    const started = computed(() => timeline.length > 0 || currentSessionId.value !== null);
+    const completedCount = computed(() => todos.filter(t => t.status === 'completed').length);
+    const progressPct    = computed(() => todos.length === 0 ? 0 : Math.round(100 * completedCount.value / todos.length));
 
-    const parseModel = (selected) => {
-      // 格式: "provider:model_id"
-      const idx = selected.indexOf(':');
-      if (idx === -1) return ['kilo', selected];
-      return [selected.slice(0, idx), selected.slice(idx + 1)];
+    // ── 模型解析 ──
+    const parseModel = (s) => {
+      const i = s.indexOf(':');
+      return i === -1 ? ['kilo', s] : [s.slice(0, i), s.slice(i + 1)];
     };
 
+    // ── Meta ──
     const updateMeta = async () => {
       const [provider, model] = parseModel(selectedModel.value);
       try {
-        const resp = await fetch(`/meta?provider=${provider}&model_id=${encodeURIComponent(model)}`);
-        if (resp.ok) {
-          const data = await resp.json();
-          modelId.value = data.model_id || 'unknown';
-          ctxLen.value = data.ctx_len ? data.ctx_len.toLocaleString() : '—';
-        }
-      } catch (e) { modelId.value = 'offline'; }
+        const r = await fetch(`/meta?provider=${provider}&model_id=${encodeURIComponent(model)}`);
+        if (r.ok) { const d = await r.json(); ctxLen.value = d.ctx_len ? d.ctx_len.toLocaleString() : '—'; }
+      } catch { ctxLen.value = '—'; }
     };
-
-    // 监听模型切换，更新 meta
     watch(selectedModel, updateMeta);
 
-    const completedCount = computed(() =>
-      todos.filter(t => t.status === 'completed').length
-    );
-    const progressPct = computed(() =>
-      todos.length === 0 ? 0 : Math.round(100 * completedCount.value / todos.length)
-    );
-
-    onMounted(async () => {
-      await updateMeta();
-      nextTick(() => landingInput.value?.focus());
-    });
-
-    // ===== 辅助 =====
-    const scrollBottom = () => {
-      nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; });
+    // ── 会话列表 ──
+    const fetchSessions = async () => {
+      try {
+        const r = await fetch('/sessions');
+        if (r.ok) { const d = await r.json(); sessions.splice(0, sessions.length, ...(d.sessions || [])); }
+      } catch {}
     };
-    const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n) + '…' : (s || '');
-    const stripFormat = (s) => (s || '')
-      .replace(/Action\s*:.*$/gmi, '')
-      .replace(/Action Input\s*:.*$/gmi, '')
-      .replace(/<END_OF_ACTION>/g, '')
-      .replace(/^\s*Thought\s*:\s*/i, '')
-      .trim();
 
+    const switchSession = async (sid) => {
+      if (loading.value || sid === currentSessionId.value) return;
+      try {
+        const r = await fetch(`/sessions/${sid}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        timeline.splice(0, timeline.length);
+        // 从 session 数据恢复 todos（后端同步）
+        todos.splice(0, todos.length, ...(data.tasks || []));
+        turnCount = 0;
+        Object.keys(callCards).forEach(k => delete callCards[k]);
+        stepCounter = 0;
+        currentSessionId.value = sid;
+        currentSessionTitle.value = data.title;
+        localStorage.setItem('currentSessionId', sid);
+
+        const cardMap = {};
+        let stepNum = 0, curTurn = 0;
+        for (const msg of (data.messages || [])) {
+          if (msg.role === 'user') {
+            curTurn++;
+            if (curTurn > 1) timeline.push({ kind: 'divider', turn: curTurn });
+            timeline.push({ kind: 'question', content: msg.content });
+          } else if (msg.role === 'assistant') {
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+              for (const tc of msg.tool_calls) {
+                stepNum++;
+                const card = reactive({ kind:'step', step:stepNum, action:tc.function.name,
+                  input:tc.function.arguments||'', observation:'', running:false, expanded:false, call_id:tc.id });
+                cardMap[tc.id] = card;
+                timeline.push(card);
+              }
+            } else if (msg.content) {
+              timeline.push({ kind: 'final', content: msg.content });
+            }
+          } else if (msg.role === 'tool') {
+            const c = cardMap[msg.tool_call_id];
+            if (c) c.observation = msg.content;
+          }
+        }
+        turnCount = curTurn;
+        nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
+      } catch (e) { console.error(e); }
+    };
+
+    const deleteSession = async (sid) => {
+      try {
+        await fetch(`/sessions/${sid}`, { method: 'DELETE' });
+        if (sid === currentSessionId.value) resetAll();
+        fetchSessions();
+      } catch {}
+    };
+
+    // ── 工具函数 ──
+    const scrollBottom = () => nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; });
+    const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n) + '…' : (s || '');
+    const escapeHtml = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const renderMarkdown = (content) => {
       if (!content) return '';
-      try {
-        if (typeof marked === 'undefined') return escapeHtml(content);
-        const parser = marked.parse || marked;
-        return parser(String(content), { breaks: true, gfm: true });
-      } catch (e) {
-        console.error('markdown parse error:', e);
-        return escapeHtml(content);
-      }
+      try { return (marked.parse || marked)(String(content), { breaks: true, gfm: true }); }
+      catch { return escapeHtml(content); }
     };
 
-    const escapeHtml = (s) => String(s || '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-
-    // ===== Tool Call 卡片管理 =====
+    // ── 卡片管理 ──
     let stepCounter = 0;
-    const callCards = {};  // call_id -> reactive card
-
-    const newCard = (callId, toolName, inputPreview) => {
+    const callCards = {};
+    const newCard = (callId, toolName, input) => {
       stepCounter++;
-      const card = reactive({
-        kind: 'step',
-        step: stepCounter,
-        action: toolName,
-        input: inputPreview,
-        observation: '',
-        running: true,
-        expanded: true,
-      });
+      // 新卡片：running=true 时默认展开；完成后自动折叠
+      const card = reactive({ kind:'step', step:stepCounter, action:toolName, input, observation:'', running:true, expanded:true });
       callCards[callId] = card;
       timeline.push(card);
       scrollBottom();
       return card;
     };
+    // 完成时折叠所有卡片（running 置 false + 折叠）
+    const closeAllCards = () => Object.values(callCards).forEach(c => { c.running = false; c.expanded = false; });
 
-    const closeAllCards = () => {
-      Object.values(callCards).forEach(c => {
-        c.running = false;
-        c.expanded = false;
-      });
-    };
-
-    // ===== 发送 =====
+    // ── 键盘发送 ──
     const onKey = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        send();
-      }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     };
 
+    // ── 发送 ──
     const send = () => {
       const q = question.value.trim();
       if (!q || loading.value) return;
       loading.value = true;
       question.value = '';
-      stepCounter = 0;
       Object.keys(callCards).forEach(k => delete callCards[k]);
+      turnCount++;
+      if (turnCount > 1) timeline.push({ kind: 'divider', turn: turnCount });
 
       const [provider, model] = parseModel(selectedModel.value);
-      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}`;
+      const sid = currentSessionId.value || '';
+      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid)}`;
       const es = new EventSource(url);
-
-      // 积累最终答案流式 token
       let finalItem = null;
 
       es.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
           switch (ev.type) {
-
+            case 'session_id':
+              currentSessionId.value = ev.session_id;
+              fetchSessions();
+              break;
             case 'question':
               timeline.push({ kind: 'question', content: ev.content });
               nextTick(() => chatInput.value?.focus());
               scrollBottom();
               break;
-
-            // 工具调用开始 → 创建新卡片
             case 'tool_call':
               newCard(ev.call_id, ev.name, ev.input_preview);
               break;
-
-            // 工具执行结果
             case 'observation': {
               const card = callCards[ev.call_id];
               if (card) {
                 card.observation = ev.content;
                 card.running = false;
-                card.expanded = false;
+                card.expanded = false; // 有结果的卡片自动折叠，用户可手动展开
               }
               scrollBottom();
               break;
             }
-
-            case 'todo_update':
-              todos.splice(0, todos.length, ...(ev.items || []));
-              break;
-
-            // 最终答案流式 token
-            case 'answer_chunk':
-              if (!finalItem) {
-                finalItem = reactive({ kind: 'final', content: '' });
-                timeline.push(finalItem);
+            case 'todo_update': {
+              const items = ev.items || [];
+              todos.splice(0, todos.length, ...items);
+              // 同步更新 session.tasks
+              if (currentSessionId.value) {
+                const session = sessions.find(s => s.session_id === currentSessionId.value);
+                if (session) session.tasks = [...items];
               }
+              break;
+            }
+            case 'answer_chunk':
+              if (!finalItem) { finalItem = reactive({ kind: 'final', content: '' }); timeline.push(finalItem); }
               finalItem.content += ev.content;
               scrollBottom();
               break;
-
-            // 最终答案完整（非流式路径兜底）
             case 'final':
-              if (!finalItem) {
-                timeline.push({ kind: 'final', content: ev.content });
-              } else {
-                // 流式路径：以完整文本覆盖（确保一致）
-                finalItem.content = ev.content;
-              }
+              if (!finalItem) timeline.push({ kind: 'final', content: ev.content });
+              else finalItem.content = ev.content;
               finalItem = null;
+              fetchSessions();
               scrollBottom();
               break;
-
             case 'error':
               closeAllCards();
               timeline.push({ kind: 'error', content: ev.content });
               scrollBottom();
               break;
-
             case 'done':
               closeAllCards();
               es.close();
@@ -737,33 +869,52 @@ createApp({
       };
 
       es.onerror = () => {
-        es.close();
-        loading.value = false;
-        closeAllCards();
+        es.close(); loading.value = false; closeAllCards();
         timeline.push({ kind: 'error', content: '连接中断' });
       };
     };
 
-    const reset = () => {
+    // ── 新对话 / 重置 ──
+    const newChat = () => {
+      resetAll();
+      fetchSessions();
+      nextTick(() => chatInput.value?.focus());
+    };
+    const resetAll = () => {
       timeline.splice(0, timeline.length);
       todos.splice(0, todos.length);
       question.value = '';
-      stepCounter = 0;
+      stepCounter = 0; turnCount = 0;
+      currentSessionId.value = null;
+      currentSessionTitle.value = '';
       Object.keys(callCards).forEach(k => delete callCards[k]);
+      localStorage.removeItem('currentSessionId');
       nextTick(() => landingInput.value?.focus());
     };
 
+    onMounted(async () => {
+      await updateMeta();
+      await fetchSessions();
+      // 恢复上次会话
+      const savedSid = localStorage.getItem('currentSessionId');
+      if (savedSid && sessions.find(s => s.session_id === savedSid)) {
+        await switchSession(savedSid);
+      }
+      nextTick(() => landingInput.value?.focus());
+    });
+
     return {
       question, timeline, todos, loading, started,
-      selectedModel, modelId, ctxLen,
+      sessions, currentSessionId, currentSessionTitle,
+      selectedModel, ctxLen,
       completedCount, progressPct,
+      sidebarOpen, todoOpen,
       chatBody, landingInput, chatInput,
-      send, reset, onKey, truncate, stripFormat, renderMarkdown,
-      updateMeta, parseModel,
+      send, newChat, onKey, truncate, renderMarkdown,
+      switchSession, deleteSession,
     };
-  },
+  }
 }).mount('#app');
 </script>
-
 </body>
 </html>

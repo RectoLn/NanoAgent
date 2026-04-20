@@ -53,9 +53,18 @@ class ToolCallAgent:
         prompt_file = prompts_cfg.get("system", "prompts/system.md")
         self.system_prompt = _load_prompt(prompt_file)
 
-    def run_iter(self, question: str) -> Generator[Dict[str, Any], None, None]:
+    def run_iter(
+        self,
+        question: str,
+        history: Optional[List[Dict]] = None,
+    ) -> Generator[Dict[str, Any], None, None]:
         """
         以生成器方式执行 Tool Call 主循环，逐步产出事件字典。
+
+        参数：
+          question: 当前用户输入
+          history:  已有的多轮消息历史（OpenAI格式，含 system），由 Session 提供。
+                    若为 None，则新建单轮对话（含 system+user）。
 
         事件类型：
           {"type": "question",     "content": str}
@@ -64,15 +73,25 @@ class ToolCallAgent:
           {"type": "todo_update",  "items": list}
           {"type": "answer_chunk", "content": str}   # 流式 token
           {"type": "final",        "content": str}   # 完整最终答案
+          {"type": "new_messages", "messages": list} # 本轮新增消息（供 session 追加）
           {"type": "error",        "content": str}
           {"type": "done"}
         """
         yield {"type": "question", "content": question}
 
-        messages: List[Dict] = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user",   "content": question},
-        ]
+        # 如果有 history（含 system），直接使用并追加本轮 user 消息
+        # 否则构建新对话
+        if history is not None:
+            messages: List[Dict] = list(history)
+            messages.append({"role": "user", "content": question})
+        else:
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user",   "content": question},
+            ]
+
+        # 记录本轮新增消息（不含历史），供 session 保存
+        new_messages: List[Dict] = [{"role": "user", "content": question}]
 
         for step in range(1, self.max_steps + 1):
             # ── 请求模型（非流式，获取 tool_calls 或 stop）──────────────
@@ -108,6 +127,7 @@ class ToolCallAgent:
                     for tc in message.tool_calls
                 ]
             messages.append(msg_dict)
+            new_messages.append(msg_dict)
 
             # ── 情况 1：模型决定停止，输出最终答案 ────────────────────
             if finish_reason == "stop":
@@ -127,8 +147,15 @@ class ToolCallAgent:
                         if event["type"] == "content":
                             full += event["content"]
                             yield {"type": "answer_chunk", "content": event["content"]}
+                    final_text = full
                     yield {"type": "final", "content": full}
 
+                # 追加最终 assistant 回复到 new_messages（已通过 msg_dict 追加过，此处修正 content）
+                # msg_dict 已在上面加入 new_messages，但 content 可能为空，需修正最后一条
+                if new_messages and new_messages[-1].get("role") == "assistant":
+                    new_messages[-1]["content"] = final_text
+
+                yield {"type": "new_messages", "messages": new_messages}
                 yield {"type": "done"}
                 return
 
@@ -160,11 +187,13 @@ class ToolCallAgent:
                         yield {"type": "todo_update", "items": list(TODO.items)}
 
                     # 把工具结果追加到 messages
-                    messages.append({
+                    tool_msg = {
                         "role": "tool",
                         "tool_call_id": call_id,
                         "content": result,
-                    })
+                    }
+                    messages.append(tool_msg)
+                    new_messages.append(tool_msg)
 
                 continue  # 继续下一轮，让模型观察结果
 
@@ -173,10 +202,12 @@ class ToolCallAgent:
                 yield {"type": "error", "content": "模型输出因 token 限制被截断"}
             else:
                 yield {"type": "error", "content": f"意外的 finish_reason: {finish_reason}"}
+            yield {"type": "new_messages", "messages": new_messages}
             yield {"type": "done"}
             return
 
         yield {"type": "error", "content": f"已达到 max_steps={self.max_steps} 上限"}
+        yield {"type": "new_messages", "messages": new_messages}
         yield {"type": "done"}
 
     def run(self, question: str) -> str:
