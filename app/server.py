@@ -42,6 +42,7 @@ load_dotenv()
 from client import HelloAgentsLLM
 from agent import ReActAgent
 from session_manager import SESSION_MGR
+from task_manager import TASK_MGR
 import tools  # noqa: F401 触发工具自动注册
 
 # --- FastAPI 应用 ---
@@ -109,7 +110,9 @@ def index():
     index_file = _STATIC_DIR / "index.html"
     if index_file.is_file():
         return FileResponse(str(index_file))
-    return JSONResponse({"msg": "前端页面未找到，请访问 /docs 查看 API"}, status_code=404)
+    return JSONResponse(
+        {"msg": "前端页面未找到，请访问 /docs 查看 API"}, status_code=404
+    )
 
 
 @app.get("/health")
@@ -121,6 +124,7 @@ def health():
 def get_todo():
     """返回当前全局 Todo 列表快照。"""
     from todo_manager import TODO
+
     return {"items": TODO.items}
 
 
@@ -137,6 +141,7 @@ def meta(provider: str = Query("kilo"), model_id: str = Query("")):
 
 
 # ───────────────────── 会话管理端点 ─────────────────────
+
 
 @app.get("/sessions")
 def list_sessions():
@@ -172,6 +177,53 @@ def delete_session(session_id: str = FPath(...)):
 
 # ───────────────────── 对话端点 ─────────────────────
 
+
+@app.get("/tasks/{task_id}/stream")
+def task_stream(
+    task_id: str = FPath(...),
+    last_index: int = Query(0, description="已推送的事件索引，从此开始回放"),
+):
+    """
+    任务观察流（Server-Sent Events）。
+    纯观察接口，只回放历史事件和订阅新事件，不启动新任务。
+    前端断开重连时使用此接口。
+    """
+    task = TASK_MGR.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+
+    def event_gen():
+        current_index = last_index
+        while True:
+            # 获取新事件
+            new_events = TASK_MGR.get_events_from_index(task_id, current_index)
+            for event in new_events:
+                payload = json.dumps(event, ensure_ascii=False)
+                yield f"data: {payload}\n\n"
+                current_index += 1
+
+            # 如果任务完成，退出
+            if TASK_MGR.is_task_done(task_id):
+                break
+
+            # 短暂等待，避免忙等
+            import time
+
+            time.sleep(0.1)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ───────────────────── 对话端点 ─────────────────────
+
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     """
@@ -184,7 +236,9 @@ def chat(req: ChatRequest):
     agent = _new_agent(req.provider, req.model_id)
 
     # 会话：获取或新建
-    session = SESSION_MGR.get_or_create(req.session_id, system_prompt=agent.system_prompt)
+    session = SESSION_MGR.get_or_create(
+        req.session_id, system_prompt=agent.system_prompt
+    )
     history = session.get_messages_for_llm()
 
     try:
@@ -235,12 +289,19 @@ def chat_stream(
     session = SESSION_MGR.get_or_create(sid, system_prompt=agent.system_prompt)
     history = session.get_messages_for_llm()
 
-    def event_gen():
-        # 首先推送当前 session_id 给前端
-        yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
+    # 启动任务
+    task_id = TASK_MGR.start_task(session.session_id, question, agent, history)
 
-        try:
-            for event in agent.run_iter(question, history=history):
+    def event_gen():
+        # 首先推送 session_id 和 task_id 给前端
+        yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'task_id', 'task_id': task_id}, ensure_ascii=False)}\n\n"
+
+        last_index = 0
+        while True:
+            # 获取新事件
+            new_events = TASK_MGR.get_events_from_index(task_id, last_index)
+            for event in new_events:
                 if event["type"] == "new_messages":
                     # 保存本轮新消息到 session（不推给前端）
                     for msg in event["messages"]:
@@ -251,13 +312,19 @@ def chat_stream(
                     session.tasks = event["items"]
                 payload = json.dumps(event, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
-        except Exception as e:
-            err = json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)
-            yield f"data: {err}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        finally:
-            # 无论正常结束还是客户端断开，都保存当前状态
-            SESSION_MGR._save_session(session.session_id)
+                last_index += 1
+
+            # 如果任务完成，退出
+            if TASK_MGR.is_task_done(task_id):
+                break
+
+            # 短暂等待，避免忙等
+            import time
+
+            time.sleep(0.1)
+
+        # 任务完成后保存 session
+        SESSION_MGR._save_session(session.session_id)
 
     return StreamingResponse(
         event_gen(),
@@ -271,6 +338,7 @@ def chat_stream(
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "server:app",
         host="0.0.0.0",

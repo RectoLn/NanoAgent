@@ -1,142 +1,101 @@
-#!/usr/bin/env python3
 """
-快速排序算法实现
+快速排序（Quick Sort）实现
+时间复杂度: O(n log n) 平均, O(n²) 最坏
+空间复杂度: O(log n)
 """
+import random
 
 def quick_sort(arr):
-    """
-    快速排序主函数
-    """
+    """快速排序主函数"""
     if len(arr) <= 1:
         return arr
     
-    # 选择基准元素（这里选择最后一个元素）
-    pivot = arr[-1]
+    # 选择基准元素（这里使用第一个元素）
+    pivot = arr[0]
     
-    # 分区操作
-    left = []
-    right = []
-    equal = []
+    # 分区：小于基准的放左边，大于基准的放右边
+    left = [x for x in arr[1:] if x < pivot]
+    right = [x for x in arr[1:] if x >= pivot]
     
-    for num in arr:
-        if num < pivot:
-            left.append(num)
-        elif num > pivot:
-            right.append(num)
-        else:
-            equal.append(num)
-    
-    # 递归排序左右子数组
-    return quick_sort(left) + equal + quick_sort(right)
+    # 递归排序左右两部分并合并
+    return quick_sort(left) + [pivot] + quick_sort(right)
 
 
 def quick_sort_inplace(arr, low=0, high=None):
-    """
-    原地快速排序（节省空间）
-    """
+    """原地快速排序（使用双指针法）"""
     if high is None:
         high = len(arr) - 1
     
     if low < high:
-        # 分区操作，返回基准元素的正确位置
-        pi = partition(arr, low, high)
-        
-        # 递归排序左右子数组
-        quick_sort_inplace(arr, low, pi - 1)
-        quick_sort_inplace(arr, pi + 1, high)
+        # 分区，返回基准元素的正确位置
+        pivot_idx = partition(arr, low, high)
+        # 递归排序左右两部分
+        quick_sort_inplace(arr, low, pivot_idx - 1)
+        quick_sort_inplace(arr, pivot_idx + 1, high)
     
     return arr
 
 
 def partition(arr, low, high):
-    """
-    分区函数，用于原地快速排序
-    """
-    # 选择基准元素（这里选择最后一个元素）
-    pivot = arr[high]
-    
-    # 小于基准元素的索引
+    """分区操作"""
+    pivot = arr[high]  # 选择最后一个元素作为基准
     i = low - 1
     
     for j in range(low, high):
         if arr[j] <= pivot:
             i += 1
-            # 交换元素
             arr[i], arr[j] = arr[j], arr[i]
     
-    # 将基准元素放到正确位置
     arr[i + 1], arr[high] = arr[high], arr[i + 1]
     return i + 1
 
 
-def test_quick_sort():
-    """
-    测试快速排序算法
-    """
-    test_cases = [
-        ([], []),
-        ([1], [1]),
-        ([5, 2, 8, 1, 9], [1, 2, 5, 8, 9]),
-        ([9, 8, 7, 6, 5], [5, 6, 7, 8, 9]),
-        ([3, 1, 4, 1, 5, 9, 2, 6], [1, 1, 2, 3, 4, 5, 6, 9]),
-        ([64, 34, 25, 12, 22, 11, 90], [11, 12, 22, 25, 34, 64, 90]),
-    ]
-    
-    print("测试快速排序算法...")
+# ====== 测试代码 ======
+if __name__ == "__main__":
+    print("=" * 50)
+    print("快速排序算法测试")
     print("=" * 50)
     
-    # 测试普通快速排序
-    print("1. 测试普通快速排序（非原地）：")
-    for i, (input_arr, expected) in enumerate(test_cases):
-        result = quick_sort(input_arr.copy())
-        status = "✓" if result == expected else "✗"
-        print(f"  测试用例 {i+1}: {status}")
-        if result != expected:
-            print(f"    输入: {input_arr}")
-            print(f"    期望: {expected}")
-            print(f"    实际: {result}")
+    # 测试1: 基本功能测试
+    print("\n【测试1】基本排序功能")
+    test_cases = [
+        ([3, 1, 4, 1, 5, 9, 2, 6], "乱序数组"),
+        ([1], "单个元素"),
+        ([], "空数组"),
+        ([5, 4, 3, 2, 1], "逆序数组"),
+        ([1, 1, 1, 1], "重复元素"),
+    ]
     
-    print("\n2. 测试原地快速排序：")
-    for i, (input_arr, expected) in enumerate(test_cases):
-        arr_copy = input_arr.copy()
-        result = quick_sort_inplace(arr_copy)
-        status = "✓" if result == expected else "✗"
-        print(f"  测试用例 {i+1}: {status}")
-        if result != expected:
-            print(f"    输入: {input_arr}")
-            print(f"    期望: {expected}")
-            print(f"    实际: {result}")
+    for arr, desc in test_cases:
+        original = arr.copy()
+        result = quick_sort(arr.copy())
+        print(f"  {desc}: {original} → {result}")
+        assert result == sorted(original), f"排序失败: {result}"
+    print("  ✓ 所有基本测试通过")
     
-    # 性能测试
-    print("\n3. 性能测试：")
-    import random
-    import time
+    # 测试2: 原地排序测试
+    print("\n【测试2】原地排序功能")
+    test_arr = [3, 1, 4, 1, 5, 9, 2, 6]
+    original = test_arr.copy()
+    quick_sort_inplace(test_arr)
+    print(f"  {original} → {test_arr}")
+    assert test_arr == sorted(original), "原地排序失败"
+    print("  ✓ 原地排序测试通过")
     
-    # 生成随机数组
-    random.seed(42)
-    large_array = [random.randint(0, 10000) for _ in range(1000)]
+    # 测试3: 性能测试
+    print("\n【测试3】性能测试（大数据）")
+    large_arr = [random.randint(1, 10000) for _ in range(10000)]
+    sorted_arr = quick_sort(large_arr.copy())
+    assert sorted_arr == sorted(large_arr), "大数据排序失败"
+    print(f"  ✓ 10000个随机整数排序成功")
     
-    # 测试普通快速排序性能
-    start_time = time.time()
-    sorted_array1 = quick_sort(large_array.copy())
-    time1 = time.time() - start_time
+    # 测试4: 完全有序数组（最坏情况）
+    print("\n【测试4】完全有序数组")
+    sorted_arr = list(range(1, 101))
+    result = quick_sort(sorted_arr.copy())
+    assert result == list(range(1, 101)), "有序数组排序失败"
+    print(f"  ✓ 100个有序整数排序成功")
     
-    # 测试原地快速排序性能
-    start_time = time.time()
-    arr_copy = large_array.copy()
-    sorted_array2 = quick_sort_inplace(arr_copy)
-    time2 = time.time() - start_time
-    
-    # 验证排序结果正确性
-    is_correct = sorted_array1 == sorted(large_array) and sorted_array2 == sorted(large_array)
-    
-    print(f"  数组大小: 1000个随机整数")
-    print(f"  普通快速排序时间: {time1:.4f}秒")
-    print(f"  原地快速排序时间: {time2:.4f}秒")
-    print(f"  排序结果正确: {'✓' if is_correct else '✗'}")
-    
-    return True
-
-
-if __name__ == "__main__":
-    test_quick_sort()
+    print("\n" + "=" * 50)
+    print("所有测试通过！✓")
+    print("=" * 50)

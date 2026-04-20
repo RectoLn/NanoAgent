@@ -51,10 +51,12 @@ app/
 - **进度跟踪**：实时更新任务状态（pending/in_progress/completed/cancelled）
 - **视觉反馈**：右侧面板显示任务进度条和状态
 - **会话绑定**：任务状态与当前会话持久化关联
+- **独立运行**：任务在后端独立线程执行，支持前端断开重连
+- **中断恢复**：切换会话/刷新不影响任务执行，前端可重新观察
 
 ### ✅ 用户体验优化
 - **响应式布局**：支持桌面/移动端，三栏自适应
-- **中断恢复**：loading 时可切换会话，自动中断当前流
+- **中断恢复**：loading 时可切换会话，自动中断当前流，支持任务重连
 - **错误处理**：网络错误、模型异常的友好提示
 - **面板折叠**：左侧会话列表和右侧任务面板支持折叠
 
@@ -109,6 +111,13 @@ app/
 - `get_or_create(session_id, system_prompt)`: 获取或创建
 - `delete(session_id)`: 删除会话
 
+#### TaskManager (task_manager.py)
+- `TaskManager()`: 单例，管理所有后台任务
+- `start_task(session_id, question, agent, history)`: 启动后台任务，返回 task_id
+- `get_task(task_id)`: 获取任务状态
+- `get_events_from_index(task_id, last_index)`: 获取新事件用于回放
+- `is_task_done(task_id)`: 检查任务是否完成
+
 #### ToolCallAgent (agent.py)
 - `ToolCallAgent(llm)`: 初始化 Agent
 - `run_iter(question, history=None)`: 核心 Tool Call 循环生成器
@@ -116,7 +125,8 @@ app/
 
 #### FastAPI 端点 (server.py)
 - `GET /`: 返回前端页面
-- `GET /chat/stream`: SSE 流式对话
+- `GET /chat/stream`: SSE 流式对话（启动后台任务）
+- `GET /tasks/{task_id}/stream`: SSE 任务观察流（纯观察接口）
 - `POST /chat`: 阻塞式对话
 - `GET /sessions`: 列出会话摘要
 - `POST /sessions`: 新建会话
@@ -133,6 +143,7 @@ app/
 
 #### 全局状态
 - `SESSION_MGR`: SessionManager 单例
+- `TASK_MGR`: TaskManager 单例 (task_manager.py)
 - `TODO`: TodoManager 单例 (todo_manager.py)
 - `TOOLS_SCHEMA`: 工具描述列表 (registry.py)
 
@@ -141,7 +152,8 @@ app/
 - `todos`: 当前任务列表
 - `sessions`: 会话摘要列表
 - `currentSessionId`: 当前会话 ID
-- `activeEs`: 当前活跃的 EventSource
+- `currentTaskId`: 当前任务 ID
+- `currentEventSource`: 当前活跃的 EventSource
 
 ### 🛠️ 配置参数 (config.yaml)
 ```yaml
@@ -180,6 +192,7 @@ def execute_tool_call(name, args_json):
 - ✅ 完善 Todo 会话绑定和持久化
 - ✅ Docker Desktop Windows 支持
 - ✅ 项目进度文档化
+- ✅ 实现任务独立运行和重连机制
 
 ### 下一步开发规划 (按优先级)
 1. 会话管理完善（多用户隔离）

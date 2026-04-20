@@ -662,9 +662,11 @@ createApp({
     const sessions      = reactive([]);
     const currentSessionId    = ref(null);
     const currentSessionTitle = ref('');
+    const currentTaskId = ref(null);
     const selectedModel = ref('kilo:kilo-auto/free');
     const ctxLen        = ref('—');
     let turnCount = 0;
+    let currentEventSource = null;
 
     // 面板折叠状态
     const sidebarOpen = ref(true);
@@ -706,7 +708,8 @@ createApp({
     };
 
     const switchSession = async (sid) => {
-      if (loading.value || sid === currentSessionId.value) return;
+      if (sid === currentSessionId.value) return;
+      if (currentEventSource) currentEventSource.close();
       try {
         const r = await fetch(`/sessions/${sid}`);
         if (!r.ok) return;
@@ -719,7 +722,9 @@ createApp({
         stepCounter = 0;
         currentSessionId.value = sid;
         currentSessionTitle.value = data.title;
+        currentTaskId.value = null;
         localStorage.setItem('currentSessionId', sid);
+        localStorage.removeItem('currentTaskId');
 
         const cardMap = {};
         let stepNum = 0, curTurn = 0;
@@ -753,7 +758,10 @@ createApp({
     const deleteSession = async (sid) => {
       try {
         await fetch(`/sessions/${sid}`, { method: 'DELETE' });
-        if (sid === currentSessionId.value) resetAll();
+        if (sid === currentSessionId.value) {
+          if (currentEventSource) currentEventSource.close();
+          resetAll();
+        }
         fetchSessions();
       } catch {}
     };
@@ -788,10 +796,82 @@ createApp({
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     };
 
+    // ── 恢复任务 ──
+    const resumeTask = async (taskId) => {
+      if (!taskId) return;
+      if (currentEventSource) currentEventSource.close();
+      loading.value = true;
+      const url = `/tasks/${taskId}/stream?last_index=0`;
+      currentEventSource = new EventSource(url);
+      let finalItem = null;
+
+      currentEventSource.onmessage = (e) => {
+        try {
+          const ev = JSON.parse(e.data);
+          switch (ev.type) {
+            case 'question':
+              timeline.push({ kind: 'question', content: ev.content });
+              scrollBottom();
+              break;
+            case 'tool_call':
+              newCard(ev.call_id, ev.name, ev.input_preview);
+              break;
+            case 'observation': {
+              const card = callCards[ev.call_id];
+              if (card) {
+                card.observation = ev.content;
+                card.running = false;
+                card.expanded = false;
+              }
+              scrollBottom();
+              break;
+            }
+            case 'todo_update': {
+              const items = ev.items || [];
+              todos.splice(0, todos.length, ...items);
+              if (currentSessionId.value) {
+                const session = sessions.find(s => s.session_id === currentSessionId.value);
+                if (session) session.tasks = [...items];
+              }
+              break;
+            }
+            case 'answer_chunk':
+              if (!finalItem) { finalItem = reactive({ kind: 'final', content: '' }); timeline.push(finalItem); }
+              finalItem.content += ev.content;
+              scrollBottom();
+              break;
+            case 'final':
+              if (!finalItem) timeline.push({ kind: 'final', content: ev.content });
+              else finalItem.content = ev.content;
+              finalItem = null;
+              scrollBottom();
+              break;
+            case 'error':
+              closeAllCards();
+              timeline.push({ kind: 'error', content: ev.content });
+              scrollBottom();
+              break;
+            case 'done':
+              closeAllCards();
+              currentEventSource.close(); currentEventSource = null;
+              loading.value = false;
+              finalItem = null;
+              break;
+          }
+        } catch (err) { console.error(err); }
+      };
+
+      currentEventSource.onerror = () => {
+        currentEventSource.close(); currentEventSource = null; loading.value = false; closeAllCards();
+        timeline.push({ kind: 'error', content: '连接中断' });
+      };
+    };
+
     // ── 发送 ──
     const send = () => {
       const q = question.value.trim();
-      if (!q || loading.value) return;
+      if (!q) return;
+      if (currentEventSource) currentEventSource.close();
       loading.value = true;
       question.value = '';
       Object.keys(callCards).forEach(k => delete callCards[k]);
@@ -801,17 +881,21 @@ createApp({
       const [provider, model] = parseModel(selectedModel.value);
       const sid = currentSessionId.value || '';
       const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid)}`;
-      const es = new EventSource(url);
+      currentEventSource = new EventSource(url);
       let finalItem = null;
 
-      es.onmessage = (e) => {
+      currentEventSource.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
           switch (ev.type) {
-            case 'session_id':
-              currentSessionId.value = ev.session_id;
-              fetchSessions();
-              break;
+        case 'session_id':
+          currentSessionId.value = ev.session_id;
+          fetchSessions();
+          break;
+        case 'task_id':
+          currentTaskId.value = ev.task_id;
+          localStorage.setItem('currentTaskId', ev.task_id);
+          break;
             case 'question':
               timeline.push({ kind: 'question', content: ev.content });
               nextTick(() => chatInput.value?.focus());
@@ -859,7 +943,7 @@ createApp({
               break;
             case 'done':
               closeAllCards();
-              es.close();
+              currentEventSource.close(); currentEventSource = null;
               loading.value = false;
               finalItem = null;
               nextTick(() => chatInput.value?.focus());
@@ -868,14 +952,15 @@ createApp({
         } catch (err) { console.error(err); }
       };
 
-      es.onerror = () => {
-        es.close(); loading.value = false; closeAllCards();
+      currentEventSource.onerror = () => {
+        currentEventSource.close(); currentEventSource = null; loading.value = false; closeAllCards();
         timeline.push({ kind: 'error', content: '连接中断' });
       };
     };
 
     // ── 新对话 / 重置 ──
     const newChat = () => {
+      if (currentEventSource) currentEventSource.close();
       resetAll();
       fetchSessions();
       nextTick(() => chatInput.value?.focus());
@@ -887,8 +972,10 @@ createApp({
       stepCounter = 0; turnCount = 0;
       currentSessionId.value = null;
       currentSessionTitle.value = '';
+      currentTaskId.value = null;
       Object.keys(callCards).forEach(k => delete callCards[k]);
       localStorage.removeItem('currentSessionId');
+      localStorage.removeItem('currentTaskId');
       nextTick(() => landingInput.value?.focus());
     };
 
@@ -900,17 +987,22 @@ createApp({
       if (savedSid && sessions.find(s => s.session_id === savedSid)) {
         await switchSession(savedSid);
       }
+      // 恢复任务
+      const savedTaskId = localStorage.getItem('currentTaskId');
+      if (savedTaskId) {
+        await resumeTask(savedTaskId);
+      }
       nextTick(() => landingInput.value?.focus());
     });
 
     return {
       question, timeline, todos, loading, started,
-      sessions, currentSessionId, currentSessionTitle,
+      sessions, currentSessionId, currentSessionTitle, currentTaskId,
       selectedModel, ctxLen,
       completedCount, progressPct,
       sidebarOpen, todoOpen,
       chatBody, landingInput, chatInput,
-      send, newChat, onKey, truncate, renderMarkdown,
+      send, newChat, resumeTask, onKey, truncate, renderMarkdown,
       switchSession, deleteSession,
     };
   }
