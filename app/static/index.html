@@ -668,6 +668,9 @@ createApp({
     let turnCount = 0;
     let currentEventSource = null;
 
+    // session_id -> task_id 映射
+    const sessionTaskMap = reactive({});
+
     // 面板折叠状态
     const sidebarOpen = ref(true);
     const todoOpen    = ref(true);
@@ -721,9 +724,14 @@ createApp({
         stepCounter = 0;
         currentSessionId.value = sid;
         currentSessionTitle.value = data.title;
-        currentTaskId.value = null;
         localStorage.setItem('currentSessionId', sid);
-        localStorage.removeItem('currentTaskId');
+
+        // 恢复该会话对应的任务
+        const taskId = sessionTaskMap[sid];
+        if (taskId) {
+          currentTaskId.value = taskId;
+          await resumeTask(taskId);
+        }
 
         const cardMap = {};
         let stepNum = 0, curTurn = 0;
@@ -760,10 +768,10 @@ createApp({
         if (sid === currentSessionId.value) {
           if (currentEventSource) currentEventSource.close();
           resetAll();
-        } else {
-          // 如果删除的任务所属会话，清除任务
-          // 但现在任务独立，暂时不处理
         }
+        // 删除该会话的任务映射
+        delete sessionTaskMap[sid];
+        localStorage.removeItem('task_map_' + sid);
         fetchSessions();
       } catch {}
     };
@@ -896,7 +904,10 @@ createApp({
           break;
         case 'task_id':
           currentTaskId.value = ev.task_id;
-          localStorage.setItem('currentTaskId', ev.task_id);
+          if (currentSessionId.value) {
+            sessionTaskMap[currentSessionId.value] = ev.task_id;
+            localStorage.setItem('task_map_' + currentSessionId.value, ev.task_id);
+          }
           break;
             case 'question':
               timeline.push({ kind: 'question', content: ev.content });
@@ -978,21 +989,25 @@ createApp({
       Object.keys(callCards).forEach(k => delete callCards[k]);
       localStorage.removeItem('currentSessionId');
       localStorage.removeItem('currentTaskId');
+      // 注意：不清理 sessionTaskMap，保留任务记录
       nextTick(() => landingInput.value?.focus());
     };
 
     onMounted(async () => {
+      // 恢复 session -> task 映射
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('task_map_'))
+        .forEach(k => {
+          const sid = k.replace('task_map_', '');
+          sessionTaskMap[sid] = localStorage.getItem(k);
+        });
+
       await updateMeta();
       await fetchSessions();
       // 恢复上次会话
       const savedSid = localStorage.getItem('currentSessionId');
       if (savedSid && sessions.find(s => s.session_id === savedSid)) {
         await switchSession(savedSid);
-      }
-      // 恢复任务
-      const savedTaskId = localStorage.getItem('currentTaskId');
-      if (savedTaskId) {
-        await resumeTask(savedTaskId);
       }
       nextTick(() => landingInput.value?.focus());
     });
