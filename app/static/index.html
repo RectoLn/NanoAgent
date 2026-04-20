@@ -721,7 +721,9 @@ createApp({
         stepCounter = 0;
         currentSessionId.value = sid;
         currentSessionTitle.value = data.title;
+        currentTaskId.value = null;
         localStorage.setItem('currentSessionId', sid);
+        localStorage.removeItem('currentTaskId');
 
         const cardMap = {};
         let stepNum = 0, curTurn = 0;
@@ -748,12 +750,7 @@ createApp({
           }
         }
         turnCount = curTurn;
-        // 如果有当前任务，继续观察
-        if (currentTaskId.value) {
-          await resumeTask(currentTaskId.value);
-        } else {
-          nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
-        }
+        nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
       } catch (e) { console.error(e); }
     };
 
