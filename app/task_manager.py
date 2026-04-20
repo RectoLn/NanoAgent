@@ -43,10 +43,12 @@ class TaskManager:
         agent: ReActAgent,
         history: Optional[List[Dict]] = None,
     ) -> str:
-        """启动新任务，在独立线程运行 agent.run_iter()"""
+        """启动新任务，在独立线程运行 agent.run_iter()，直接在线程内保存 session"""
         task_id = str(uuid.uuid4())
         task_state = TaskState(task_id=task_id, session_id=session_id, status="pending")
         self.tasks[task_id] = task_state
+
+        session = SESSION_MGR.get(session_id)
 
         def run_task():
             with task_state.lock:
@@ -54,19 +56,28 @@ class TaskManager:
 
             try:
                 for event in agent.run_iter(question, history=history):
+                    # 在线程内直接处理消息和 todo，与前端连接无关
+                    if event["type"] == "new_messages" and session:
+                        for msg in event["messages"]:
+                            session.add_message(msg)
+                        # 每收到 new_messages 就立即持久化
+                        SESSION_MGR._save_session(session_id)
+                    elif event["type"] == "todo_update" and session:
+                        session.tasks = event["items"]
+
                     with task_state.lock:
                         task_state.events.append(event)
 
                 with task_state.lock:
                     task_state.status = "done"
-                    # 保存 session
-                    SESSION_MGR._save_session(session_id)
 
             except Exception as e:
                 with task_state.lock:
                     task_state.status = "error"
                     task_state.events.append({"type": "error", "content": str(e)})
                     task_state.events.append({"type": "done"})
+                if session:
+                    SESSION_MGR._save_session(session_id)
 
         thread = threading.Thread(target=run_task, daemon=True)
         task_state.thread = thread

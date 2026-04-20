@@ -193,23 +193,25 @@ def task_stream(
         return JSONResponse({"error": "任务不存在"}, status_code=404)
 
     def event_gen():
+        import time
+
         current_index = last_index
-        while True:
-            # 获取新事件
-            new_events = TASK_MGR.get_events_from_index(task_id, current_index)
-            for event in new_events:
-                payload = json.dumps(event, ensure_ascii=False)
-                yield f"data: {payload}\n\n"
-                current_index += 1
+        try:
+            while True:
+                new_events = TASK_MGR.get_events_from_index(task_id, current_index)
+                for event in new_events:
+                    current_index += 1
+                    if event["type"] == "new_messages":
+                        continue  # 已在后台线程保存，不推给前端
+                    payload = json.dumps(event, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
 
-            # 如果任务完成，退出
-            if TASK_MGR.is_task_done(task_id):
-                break
+                if TASK_MGR.is_task_done(task_id):
+                    break
 
-            # 短暂等待，避免忙等
-            import time
-
-            time.sleep(0.1)
+                time.sleep(0.05)
+        except GeneratorExit:
+            pass
 
     return StreamingResponse(
         event_gen(),
@@ -295,7 +297,7 @@ def chat_stream(
     def event_gen():
         import time
 
-        # 首先推送 session_id 和 task_id 给前端
+        # 推送 session_id 和 task_id 给前端
         yield f"data: {json.dumps({'type': 'session_id', 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'task_id', 'task_id': task_id}, ensure_ascii=False)}\n\n"
 
@@ -304,38 +306,19 @@ def chat_stream(
             while True:
                 new_events = TASK_MGR.get_events_from_index(task_id, last_index)
                 for event in new_events:
-                    last_index += 1  # 无论什么类型都先递增，防止跳过
+                    last_index += 1
+                    # new_messages 已在后台线程保存，这里只推送前端展示类事件
                     if event["type"] == "new_messages":
-                        for msg in event["messages"]:
-                            session.add_message(msg)
-                        # new_messages 不推给前端，继续下一个
                         continue
-                    elif event["type"] == "todo_update":
-                        session.tasks = event["items"]
                     payload = json.dumps(event, ensure_ascii=False)
                     yield f"data: {payload}\n\n"
 
-                # 任务完成：把剩余未处理的 new_messages 也处理掉，然后保存
                 if TASK_MGR.is_task_done(task_id):
-                    # 再扫一遍确保没有漏掉的 new_messages
-                    remaining = TASK_MGR.get_events_from_index(task_id, last_index)
-                    for event in remaining:
-                        last_index += 1
-                        if event["type"] == "new_messages":
-                            for msg in event["messages"]:
-                                session.add_message(msg)
-                        elif event["type"] == "todo_update":
-                            session.tasks = event["items"]
-                        else:
-                            payload = json.dumps(event, ensure_ascii=False)
-                            yield f"data: {payload}\n\n"
-                    SESSION_MGR._save_session(session.session_id)
                     break
 
                 time.sleep(0.05)
         except GeneratorExit:
-            # 客户端断开，保存当前已有的消息
-            SESSION_MGR._save_session(session.session_id)
+            pass  # 客户端断开，后台线程仍继续运行并保存 session
 
     return StreamingResponse(
         event_gen(),
