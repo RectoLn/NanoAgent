@@ -98,6 +98,22 @@ class NewSessionRequest(BaseModel):
 
 
 # --- 工具函数 ---
+def load_system_prompt() -> str:
+    """加载 system prompt 模板并注入 USER.md 内容。"""
+    prompt_path = Path(__file__).parent / "prompts" / "system.md"
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        prompt_template = f.read().strip()
+
+    user_memory_path = Path(__file__).parent / "workspace" / "wiki" / "USER.md"
+    if user_memory_path.exists():
+        with open(user_memory_path, "r", encoding="utf-8") as f:
+            user_memory = f.read().strip()
+    else:
+        user_memory = ""
+
+    return prompt_template.replace("{user_memory}", user_memory)
+
+
 def _get_llm_config(provider: str, model_id: str = "") -> dict:
     """根据 provider 返回对应的 LLM 配置。"""
     if provider == "deepseek":
@@ -123,7 +139,9 @@ def _new_agent(provider: str = "kilo", model_id: str = "") -> ToolCallAgent:
     """每次请求新建 Agent 实例。"""
     config = _get_llm_config(provider, model_id)
     llm = HelloAgentsLLM(**config)
-    return ToolCallAgent(llm=llm)
+    agent = ToolCallAgent(llm=llm)
+    agent.system_prompt = load_system_prompt()
+    return agent
 
 
 # --- 路由 ---
