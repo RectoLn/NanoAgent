@@ -1,4 +1,4 @@
-# NanoAgent v0.3 - 项目进度总结
+# NanoAgent v0.4 - 项目进度总结
 
 ## 项目概述
 
@@ -16,6 +16,9 @@ app/
 ├── server.py             # FastAPI 服务端点
 ├── config.yaml           # 配置参数（max_steps, temperature 等）
 ├── prompts/system.md     # 系统提示模板
+├── channel/              # 消息平台接入层
+│   ├── __init__.py      # 包初始化
+│   └── telegram.py      # Telegram Bot API 封装
 ├── tools/                # 工具实现目录
 │   ├── bash.py          # Bash 命令执行
 │   ├── edit_file.py     # 文件编辑
@@ -65,36 +68,43 @@ app/
 - **跨平台**：Linux/macOS/Windows Docker Desktop 支持
 - **环境配置**：.env 文件配置 API Key，支持多提供商
 
+### ✅ Telegram Bot 接入
+- **Long Polling**：服务启动即自动开始拉取消息，无需 ngrok 或公网地址
+- **Webhook 备用**：`POST /webhook/telegram` 路由保留，可随时切换
+- **独立会话**：每个 Telegram 用户独立 session（session_id = `tg_{chat_id}`）
+- **异步处理**：每条消息独立 Task，互不阻塞
+- **长消息分段**：超过 4096 字符自动分段发送
+
 ## 待实现功能
 
 ### 🔄 短期优化 (P0 - 核心基础)
-1. **会话管理** ← *地基，没它其他都跑不起来（正在进度中）*
+1. **会话管理** 
    - ✅ 已完成：基础会话持久化、切换、删除
    - 🔄 待完善：多用户隔离、会话权限控制
 
-2. **消息平台对接** ← *简历最大亮点，让agent"活"起来*
-   - 🔄 计划：集成微信/钉钉/飞书等消息平台
-   - 目标：Agent 可以通过消息平台接收任务并响应
+2. **消息平台对接** 
+   - ✅ 已完成：Telegram Bot 接入（Long Polling，无需公网）
+   - 🔄 待扩展：微信/钉钉/飞书等消息平台
 
 ### 🔄 中期规划 (P1 - 技术深度)
-3. **LLM Wiki** ← *技术深度，面试聊得起来*
+1. **LLM Wiki** 
    - 🔄 计划：构建 Agent 知识库和文档系统
    - 目标：支持 Agent 从 Wiki 中检索信息和学习
 
-4. **Multi-agent** ← *最高技术含量，压轴*
+2. **Multi-agent** 
    - 🔄 计划：实现多 Agent 协作架构
    - 目标：Agent 间任务分配、通信和协调
 
 ### 🔄 长期愿景 (P2 - 高级特性)
-5. **上下文压缩** ← *做了前四个自然需要它*
+1. **上下文压缩** 
    - 🔄 计划：长对话上下文压缩和摘要
    - 目标：突破 LLM token 限制，支持超长对话
 
-6. **定时任务** ← *锦上添花*
+2. **定时任务** 
    - 🔄 计划：Agent 定时执行任务
    - 目标：支持 cron-like 任务调度
 
-7. **心跳检测** ← *最后做，生产级细节*
+3. **心跳检测** 
    - 🔄 计划：Agent 健康监控和自动重启
    - 目标：生产环境稳定性保证
 
@@ -132,11 +142,18 @@ app/
 - `POST /sessions`: 新建会话
 - `GET /sessions/{sid}`: 获取会话详情
 - `DELETE /sessions/{sid}`: 删除会话
+- `POST /webhook/telegram`: 接收 Telegram Webhook 推送（备用），非文字消息忽略，文字消息后台处理并回复
 
 #### 公共辅助 (server.py)
 - `_poll_task_events(task_id, start_index)`: SSE 事件轮询生成器，`chat_stream` 和 `task_stream` 共用
 - `_sse_payload(event)`: 将 event dict 格式化为 SSE data 行
 - `_SSE_HEADERS`: SSE 响应头常量
+- `extract_final_reply(task)`: 从 TaskState.events 倒序查找最后一条 `type=="final"` 事件，返回其 content
+- `run_and_reply(chat_id, session_id, text)`: 后台 async 协程，发"处理中"提示 → 调用 Agent → 发最终回复
+
+#### Telegram 封装 (channel/telegram.py)
+- `send_message(chat_id, text)`: 异步发送 Telegram 消息，超 4096 字符自动分段，parse_mode=Markdown
+- `start_polling(on_message)`: Long Polling 主循环，`getUpdates(offset, timeout=30)`，收到文字消息调用 `on_message(chat_id, text)` 回调
 
 #### 前端公共函数 (static/index.html)
 - `attachStreamHandlers(es, opts)`: 统一绑定 SSE `onmessage`/`onerror`，`send` 和 `resumeTask` 共用
@@ -148,6 +165,7 @@ app/
 - `LLM_BASE_URL`: Kilo Gateway URL
 - `LLM_MODEL_ID`: 默认模型 ID
 - `DEEPSEEK_API_KEY`: DeepSeek API Key
+- `TELEGRAM_BOT_TOKEN`: Telegram Bot Token（由 @BotFather 获取，可选）
 
 #### 全局状态
 - `SESSION_MGR`: SessionManager 单例
@@ -192,6 +210,14 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.4 (2026-04-21)
+
+**Telegram Bot 接入（Long Polling 重构）**
+- `channel/telegram.py`：重写，新增 `start_polling(on_message)` Long Polling 主循环，无需 ngrok
+- `server.py`：新增 `lifespan` 启动钩子，服务启动时自动创建 polling Task
+- `server.py`：`/webhook/telegram` 路由保留作为备用通道
+- `channel/telegram.py`：`send_message` 保留，每条消息独立 asyncio.Task 互不阻塞
 
 ### v0.3 (重构 - 2026-04-21)
 
@@ -242,4 +268,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-20*
+*最后更新: 2026-04-21*

@@ -1,6 +1,6 @@
-# NanoAgent v0.3
+# NanoAgent v0.4
 
-一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册和 Web UI。
+一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册、Web UI 和 Telegram Bot 集成。
 
 > [English](./README.md)
 
@@ -13,6 +13,7 @@
 - **会话持久化**：独立会话存储，自动保存到 JSON 文件
 - **Web UI**：FastAPI 后端 + Vue 3 前端，流式输出
 - **实时流式**：逐 token 实时输出
+- **Telegram Bot**：基于 Long Polling 的消息平台集成（无需公网地址），在 Telegram 中直接与 Agent 对话
 
 ## 快速开始
 
@@ -54,6 +55,7 @@ http://localhost:9090
 | `LLM_BASE_URL` | Kilo Gateway URL |
 | `LLM_MODEL_ID` | 模型 ID（如 `kilo-auto/free`） |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key（可选） |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（由 @BotFather 创建） |
 
 ## 配置选项
 
@@ -72,6 +74,33 @@ agent:
   temperature: 0.1
   nag_threshold: 3
 ```
+
+## Telegram Bot
+
+NanoAgent 通过 **Long Polling** 支持 Telegram 集成，无需公网 IP 或 ngrok。
+
+### 配置步骤
+
+1. 在 [@BotFather](https://t.me/BotFather) 创建 Bot 并获取 token
+2. 在 `.env` 中添加：
+   ```env
+   TELEGRAM_BOT_TOKEN=你的token
+   ```
+3. 重启服务（Docker 或本地运行）
+
+Bot 会自动开始轮询消息。每个 Telegram 用户享受独立会话（`tg_<chat_id>`），支持多轮对话。
+
+### 使用方式
+
+- 在 Telegram 中向 Bot 发送任意文本消息
+- Bot 先回复 `⏳ 处理中...`
+- Agent 处理完成后返回最终答案
+
+### 注意事项
+
+- 非文本消息（图片、贴纸等）会被静默忽略
+- 超长消息会自动分段（Telegram 单条消息上限 4096 字符）
+- 保留 `/webhook/telegram` 端点作为 Webhook 模式的后备方案（需 ngrok）
 
 ## 可用模型
 
@@ -93,6 +122,9 @@ app/
 ├── session_manager.py # 会话持久化管理
 ├── todo_manager.py # Todo 状态管理
 ├── server.py      # FastAPI 服务
+├── channel/       # 消息平台接入
+│   ├── __init__.py
+│   └── telegram.py
 ├── tools/        # 工具实现
 │   ├── read_file.py
 │   ├── write_file.py

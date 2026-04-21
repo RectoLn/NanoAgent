@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     openai \
     pyyaml \
     fastapi \
-    "uvicorn[standard]"
+    "uvicorn[standard]" \
+    httpx
 
 # 暴露 Web API 端口
 EXPOSE 9090

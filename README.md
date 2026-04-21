@@ -1,6 +1,6 @@
-# NanoAgent v0.3
+# NanoAgent v0.4
 
-A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
+A minimal ReAct Agent implementation with LLM client, tool registry, web UI, and Telegram Bot integration.
 
 > [简体中文](./README_zh.md)
 
@@ -13,6 +13,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, and web UI.
 - **Session Persistence**: Independent session storage with automatic saving to JSON files
 - **Web UI**: FastAPI backend + Vue 3 frontend with stream output
 - **Markov Streaming**: Real-time token-by-token output
+- **Telegram Bot**: Long Polling integration—send messages to Bot, get Agent responses directly in Telegram (no ngrok required)
 
 ## Quick Start
 
@@ -54,6 +55,7 @@ http://localhost:9090
 | `LLM_BASE_URL` | Kilo Gateway URL |
 | `LLM_MODEL_ID` | Model ID (e.g., `kilo-auto/free`) |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key (optional) |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token from @BotFather (optional) |
 
 ## Configuration
 
@@ -72,6 +74,33 @@ agent:
   temperature: 0.1
   nag_threshold: 3
 ```
+
+## Telegram Bot
+
+NanoAgent supports Telegram integration via **Long Polling**—no public IP or ngrok required.
+
+### Setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and get your token
+2. Add the token to your `.env`:
+   ```env
+   TELEGRAM_BOT_TOKEN=your:token
+   ```
+3. Restart the service (Docker or local)
+
+The bot will automatically start polling Telegram for messages. Each Telegram user gets an independent session (`tg_<chat_id>`), so multi-turn conversations work out of the box.
+
+### Usage
+
+- Open Telegram and send any text message to your bot
+- Bot replies with `⏳ 处理中...` immediately
+- Agent processes the request and sends back the final answer
+
+### Notes
+
+- Non-text messages (photos, stickers, etc.) are silently ignored
+- Long messages are automatically split (Telegram limit: 4096 chars per message)
+- The `/webhook/telegram` endpoint remains available as a fallback (requires ngrok) if you prefer Webhook mode
 
 ## Available Models
 
@@ -93,6 +122,9 @@ app/
 ├── session_manager.py # Session persistence management
 ├── todo_manager.py # Todo state management
 ├── server.py      # FastAPI server
+├── channel/       # Messaging platform integrations
+│   ├── __init__.py
+│   └── telegram.py
 ├── tools/        # Tool implementations
 │   ├── read_file.py
 │   ├── write_file.py

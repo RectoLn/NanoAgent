@@ -25,29 +25,51 @@ SSE 事件类型：
   done            结束
 """
 
+import asyncio
 import json
 import os
+import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Query, Path as FPath
+# 确保无论从项目根目录还是 app/ 目录启动，本包内的模块都能正常导入
+sys.path.insert(0, str(Path(__file__).parent))
+
+from fastapi import BackgroundTasks, FastAPI, Query, Path as FPath
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+# usecwd=True：从进程工作目录（项目根）向上搜索 .env，
+# 避免 app/.env（空文件）被优先命中而遮蔽根目录的 .env
+load_dotenv(find_dotenv(usecwd=True))
 
 from client import HelloAgentsLLM
 from agent import ToolCallAgent
-from session_manager import SESSION_MGR
+from session_manager import SESSION_MGR, Session
 from task_manager import TASK_MGR
+from channel.telegram import send_message as tg_send, start_polling
 import tools  # noqa: F401 触发工具自动注册
 
+
+# --- lifespan：服务启动时开启 Telegram Long Polling ---
+
+
+@asynccontextmanager
+async def lifespan(app):
+    async def _on_tg_message(chat_id: int, text: str):
+        await run_and_reply(chat_id, f"tg_{chat_id}", text)
+
+    asyncio.create_task(start_polling(_on_tg_message))
+    yield
+
+
 # --- FastAPI 应用 ---
-app = FastAPI(title="ReAct Agent API", version="0.3")
+app = FastAPI(title="ReAct Agent API", version="0.3", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -295,6 +317,82 @@ def chat_stream(
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
+
+
+# ───────────────────── Telegram Webhook ─────────────────────
+
+
+def extract_final_reply(task) -> str:
+    """
+    从 task.events 倒序查找最后一条 type=="final" 的事件，返回其 content。
+
+    注意：agent.py 产出的事件格式中没有 type=="text" / role=="assistant" 的事件；
+    最终答案对应的是 type=="final"。若找不到则返回默认提示。
+    """
+    for event in reversed(task.events):
+        if event.get("type") == "final":
+            return event.get("content", "")
+    return "✅ 完成，但没有文字输出"
+
+
+def _get_tg_session(session_id: str, system_prompt: str) -> Session:
+    """
+    按指定 session_id 获取或创建 Telegram 会话。
+
+    SESSION_MGR.get_or_create() 在 session 不存在时会用随机 UUID 新建，
+    导致 tg_{chat_id} 永远无法复用。此函数直接以 session_id 为 key 注册，
+    确保同一用户每次都能续接同一条会话历史。
+    """
+    session = SESSION_MGR.get(session_id)
+    if session is None:
+        session = Session(session_id, system_prompt)
+        SESSION_MGR._sessions[session_id] = session
+        SESSION_MGR._save_session(session_id)
+    return session
+
+
+async def run_and_reply(chat_id: int, session_id: str, text: str) -> None:
+    """后台协程：调用 Agent 处理消息并将结果发送给 Telegram 用户。"""
+    # 1. 发送"处理中"提示
+    await tg_send(chat_id, "⏳ 处理中...")
+
+    # 2. 获取/创建 session，构造 agent
+    agent = _new_agent()
+    session = _get_tg_session(session_id, system_prompt=agent.system_prompt)
+    history = session.get_messages_for_llm()
+
+    # 3. 启动后台任务（在独立线程运行 agent）
+    task_id = TASK_MGR.start_task(session_id, text, agent, history)
+
+    # 4. 轮询直到任务完成
+    while not TASK_MGR.is_task_done(task_id):
+        await asyncio.sleep(1)
+
+    # 5. 提取最终回复
+    task = TASK_MGR.get_task(task_id)
+    reply = extract_final_reply(task)
+
+    # 6. 发送回复
+    await tg_send(chat_id, reply)
+
+
+@app.post("/webhook/telegram")
+async def webhook_telegram(update: dict, background_tasks: BackgroundTasks):
+    """
+    接收 Telegram Webhook 推送。
+    非文字消息直接忽略；文字消息在后台调用 Agent 并回复结果。
+    """
+    message = update.get("message", {})
+    text = message.get("text")
+    chat_id = message.get("chat", {}).get("id")
+
+    # 非文字消息忽略
+    if not text or not chat_id:
+        return {"ok": True}
+
+    session_id = f"tg_{chat_id}"
+    background_tasks.add_task(run_and_reply, chat_id, session_id, text)
+    return {"ok": True}
 
 
 if __name__ == "__main__":
