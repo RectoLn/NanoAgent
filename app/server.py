@@ -99,19 +99,26 @@ class NewSessionRequest(BaseModel):
 
 # --- 工具函数 ---
 def load_system_prompt() -> str:
-    """加载 system prompt 模板并注入 USER.md 内容。"""
+    """加载 system prompt 模板并注入 SOUL.md 和 USER.md 内容。"""
     prompt_path = Path(__file__).parent / "prompts" / "system.md"
     with open(prompt_path, "r", encoding="utf-8") as f:
         prompt_template = f.read().strip()
+
+    soul_path = Path(__file__).parent / "workspace" / "wiki" / "SOUL.md"
+    if soul_path.exists():
+        with open(soul_path, "r", encoding="utf-8") as f:
+            soul = f.read().strip()
+    else:
+        soul = "名字：未设定"
 
     user_memory_path = Path(__file__).parent / "workspace" / "wiki" / "USER.md"
     if user_memory_path.exists():
         with open(user_memory_path, "r", encoding="utf-8") as f:
             user_memory = f.read().strip()
     else:
-        user_memory = ""
+        user_memory = "暂无用户信息"
 
-    return prompt_template.replace("{user_memory}", user_memory)
+    return prompt_template.replace("{soul}", soul).replace("{user_memory}", user_memory)
 
 
 def _get_llm_config(provider: str, model_id: str = "") -> dict:
