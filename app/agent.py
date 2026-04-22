@@ -133,11 +133,9 @@ class ToolCallAgent:
             if finish_reason == "stop":
                 final_text = message.content or ""
 
-                # 用流式方式输出最终答案（已在 messages 里，换流式调用）
+                # 输出最终答案
                 # 如果 content 已有完整回答就直接推，否则再流式请求一次
                 if final_text:
-                    # 直接把已有内容推给前端（逐字符分块模拟流式）
-                    yield {"type": "answer_chunk", "content": final_text}
                     yield {"type": "final", "content": final_text}
                 else:
                     # 极少数情况：content 为空但 finish_reason=stop，再流式请求

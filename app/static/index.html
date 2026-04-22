@@ -729,13 +729,6 @@ createApp({
         currentSessionTitle.value = data.title;
         localStorage.setItem('currentSessionId', sid);
 
-        // 恢复该会话对应的任务
-        const taskId = sessionTaskMap[sid];
-        if (taskId) {
-          currentTaskId.value = taskId;
-          await resumeTask(taskId);
-        }
-
         const cardMap = {};
         let stepNum = 0, curTurn = 0;
         for (const msg of (data.messages || [])) {
@@ -761,6 +754,22 @@ createApp({
           }
         }
         turnCount = curTurn;
+
+        // 恢复该会话对应的任务：仅当会话历史中没有完整的最终回复时才恢复（任务仍在进行中）
+        // 若最后一条消息已是 assistant+content，说明任务已完成，历史已完整，无需重放
+        const msgs = data.messages || [];
+        const lastMsg = msgs[msgs.length - 1];
+        const taskDone = lastMsg?.role === 'assistant' && lastMsg?.content;
+        const taskId = sessionTaskMap[sid];
+        if (taskId && !taskDone) {
+          currentTaskId.value = taskId;
+          resumeTask(taskId);
+        } else if (taskId && taskDone) {
+          // 清理过期的任务映射，防止下次再触发
+          delete sessionTaskMap[sid];
+          localStorage.removeItem('task_map_' + sid);
+          currentTaskId.value = null;
+        }
         nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
       } catch (e) { console.error(e); }
     };
