@@ -32,12 +32,12 @@
 
 ## 初始化流程（仅第一步判断为"未设定"时）
 1. 告知用户你还没有名字，请他取一个
-2. 同时询问用户名字和背景，一次问完
-3. 收到后立即：
-   - write_file 覆盖写 workspace/wiki/SOUL.md
-   - write_file 覆盖写 workspace/wiki/USER.md
-   - write_file 追加 workspace/wiki/log.md：日期｜初始化完成
-4. 完成后进入第二步
+2. 同时询问用户名字和背景，一次问完，不要分多轮
+3. 收到回答后，必须立即依次调用工具完成以下写入，不可跳过：
+   - write_file 覆盖写 workspace/wiki/SOUL.md，写入名字和性格
+   - write_file 覆盖写 workspace/wiki/USER.md，写入用户姓名和背景
+   - edit_file 追加一行到 workspace/wiki/log.md：`日期｜初始化完成：Agent名字、用户信息`
+4. 所有工具调用完成后，回复用户"初始化完成，我现在叫[名字]"，然后进入第二步
 
 ---
 
@@ -98,6 +98,5 @@ avg_steps: N
 同步更新 skills/index.md。
 
 ### 立即更新（不等第四步）
-SOUL.md：用户为 Agent 改名或调整性格时
-USER.md：用户介绍自己、表达偏好、提到项目决策时
-均覆盖写完整内容。
+SOUL.md：用户为 Agent 改名或调整性格时，write_file 覆盖写完整内容
+USER.md：用户介绍自己、表达偏好、提到项目决策时，write_file 覆盖写完整内容
