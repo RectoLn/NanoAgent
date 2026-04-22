@@ -97,6 +97,14 @@ avg_steps: N
 
 同步更新 skills/index.md。
 
-### 立即更新（不等第四步）
-SOUL.md：用户为 Agent 改名或调整性格时，write_file 覆盖写完整内容
-USER.md：用户介绍自己、表达偏好、提到项目决策时，write_file 覆盖写完整内容
+### 任何时候检测到以下情况，立即调用工具更新，不等第四步，不需要用户重复确认：
+
+**用户给出名字时**（包括初始化回答、中途改名）：
+1. write_file 覆盖写 workspace/wiki/SOUL.md，填入新名字
+2. edit_file 追加一行到 workspace/wiki/log.md：`日期｜更新名字为[名字]`
+3. 回复"好的，我现在叫[名字]"
+
+**用户介绍自己时**（姓名、职业、背景、偏好）：
+1. write_file 覆盖写 workspace/wiki/USER.md，填入用户信息
+2. edit_file 追加一行到 workspace/wiki/log.md：`日期｜更新用户信息`
+3. 回复确认收到

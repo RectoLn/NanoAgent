@@ -15,8 +15,5 @@ build/
 # 会话记录（持久化存储）
 app/sessions/
 
-# 工作区（保留 wiki 文档，其他忽略）
-app/workspace/*
-!app/workspace/.gitkeep
-!app/workspace/wiki/
-!app/workspace/wiki/**
+# 工作区（纯运行时数据，完全忽略；初始模板在 app/templates/ 管理）
+app/workspace/

@@ -28,6 +28,7 @@ SSE 事件类型：
 import asyncio
 import json
 import os
+import shutil
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -59,8 +60,28 @@ import tools  # noqa: F401 触发工具自动注册
 # --- lifespan：服务启动时开启 Telegram Long Polling ---
 
 
+def _ensure_workspace_init() -> None:
+    """
+    将 templates/ 下所有文件复制到 workspace/（仅当目标文件不存在时）。
+    保证 Agent 首次运行时有合法的初始状态，且不覆盖已有的运行时数据。
+    """
+    from tools.workspace import WORKSPACE_DIR, TEMPLATES_DIR
+
+    if not TEMPLATES_DIR.is_dir():
+        return
+    for src in TEMPLATES_DIR.rglob("*"):
+        if not src.is_file():
+            continue
+        dest = WORKSPACE_DIR / src.relative_to(TEMPLATES_DIR)
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dest))
+
+
 @asynccontextmanager
 async def lifespan(app):
+    _ensure_workspace_init()
+
     async def _on_tg_message(chat_id: int, text: str):
         await run_and_reply(chat_id, f"tg_{chat_id}", text)
 
@@ -99,19 +120,21 @@ class NewSessionRequest(BaseModel):
 
 # --- 工具函数 ---
 def load_system_prompt() -> str:
-    template = open("prompts/system.md", "r", encoding="utf-8").read()
-    soul_path = "workspace/wiki/SOUL.md"
+    from tools.workspace import WORKSPACE_DIR
+
+    _app_dir = Path(__file__).parent
+    template = (_app_dir / "prompts" / "system.md").read_text(encoding="utf-8")
+
+    soul_file = WORKSPACE_DIR / "wiki" / "SOUL.md"
     soul = (
-        open(soul_path, "r", encoding="utf-8").read()
-        if os.path.exists(soul_path)
-        else "名字：未设定"
+        soul_file.read_text(encoding="utf-8") if soul_file.exists() else "名字：未设定"
     )
-    user_path = "workspace/wiki/USER.md"
+
+    user_file = WORKSPACE_DIR / "wiki" / "USER.md"
     user = (
-        open(user_path, "r", encoding="utf-8").read()
-        if os.path.exists(user_path)
-        else "暂无用户信息"
+        user_file.read_text(encoding="utf-8") if user_file.exists() else "暂无用户信息"
     )
+
     return template.replace("{soul}", soul).replace("{user_memory}", user)
 
 
