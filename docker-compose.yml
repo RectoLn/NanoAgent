@@ -8,5 +8,5 @@ services:
     env_file:
       - .env
     ports:
-      - "9090:9090"           # 暴露 FastAPI 服务端口到宿主机
+      - "${APP_PORT:-9090}:${APP_PORT:-9090}"   # 通过 .env 的 APP_PORT 控制
     restart: always
