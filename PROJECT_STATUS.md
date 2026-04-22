@@ -1,4 +1,4 @@
-# NanoAgent v0.4 - 项目进度总结
+# NanoAgent v0.5 - 项目进度总结
 
 ## 项目概述
 
@@ -25,13 +25,27 @@ app/
 │   ├── read_file.py     # 文件读取
 │   ├── web_fetch.py     # 网页抓取
 │   ├── write_file.py    # 文件写入
-│   └── todo.py          # Todo 管理
+│   ├── todo.py          # Todo 管理
+│   └── workspace.py     # 安全沙箱（safe_path 路径校验）
 ├── static/               # 前端资源
 │   └── index.html       # Vue 3 单页应用
-└── workspace/           # 工作区（.gitignore 忽略）
-    ├── test.txt         # 测试文件
-    ├── wiki/            # 文档目录
-    └── project/         # 示例项目（已忽略）
+├── templates/            # 初始模板（git 版本控制）
+│   └── wiki/            # Wiki 初始化模板
+│       ├── SOUL.md
+│       ├── USER.md
+│       ├── log.md
+│       ├── index.md
+│       ├── skills/
+│       │   └── index.md
+│       ├── concepts/
+│       └── entities/
+└── workspace/           # 工作区（运行时数据，.gitignore 忽略）
+    ├── untracked/       # 原始资料（未加工）
+    ├── ingested/        # 已摄取（中间态）
+    └── wiki/            # Agent 知识库
+        ├── concepts/    # 概念页
+        ├── entities/   # 实体页
+└── skills/     # 技能页
 ```
 
 ## 已实现功能
@@ -75,6 +89,21 @@ app/
 - **异步处理**：每条消息独立 Task，互不阻塞
 - **长消息分段**：超过 4096 字符自动分段发送
 
+### ✅ LLM Wiki 三层架构 + Skill 技能积累
+- **templates/ 目录**：初始模板由 git 版本控制，Agent 运行时只操作 workspace/
+- **workspace/ 目录**：纯运行时数据，.gitignore 完全忽略
+- **初始化流程**：首次启动时自动从 templates/ 复制文件到 workspace/
+- **三层知识库**：
+  - `concepts/`：概念页（抽象知识、原理）
+  - `entities/`：实体页（具体实体、人物、项目）
+  - `skills/`：技能页（任务执行经验）
+- **Skill 机制**：满足条件时自动记录技能到 skills/，同步更新 skills/index.md
+
+### ✅ 安全沙箱
+- **safe_path()**：所有文件工具（read/write/edit）必须通过路径校验
+- **路径逃逸防护**：`../` 等逃逸路径一律拒绝，仅允许 workspace/ 内操作
+- **单例导入**：workspace.py 提供 WORKSPACE_DIR、TEMPLATES_DIR 常量
+
 ## 待实现功能
 
 ### 🔄 短期优化 (P0 - 核心基础)
@@ -88,8 +117,10 @@ app/
 
 ### 🔄 中期规划 (P1 - 技术深度)
 1. **LLM Wiki** 
-   - 🔄 计划：构建 Agent 知识库和文档系统
-   - 目标：支持 Agent 从 Wiki 中检索信息和学习
+   - ✅ 已完成：三层架构（concepts/entities/skills） + Skill 积累机制
+   - ✅ 已完成：templates/ git 版本控制 + workspace/ 运行时隔离
+   - ✅ 已完成：安全沙箱（safe_path 路径校验）
+   - 🔄 待完善：concepts/entities 自动分类优化
 
 2. **Multi-agent** 
    - 🔄 计划：实现多 Agent 协作架构
@@ -150,6 +181,12 @@ app/
 - `_SSE_HEADERS`: SSE 响应头常量
 - `extract_final_reply(task)`: 从 TaskState.events 倒序查找最后一条 `type=="final"` 事件，返回其 content
 - `run_and_reply(chat_id, session_id, text)`: 后台 async 协程，发"处理中"提示 → 调用 Agent → 发最终回复
+- `_ensure_workspace_init()`: 服务启动时将 templates/ 复制到 workspace/（仅当目标不存在）
+
+#### 安全沙箱 (tools/workspace.py)
+- `WORKSPACE_DIR`: app/workspace/ 绝对路径
+- `TEMPLATES_DIR`: app/templates/ 绝对路径
+- `safe_path(path)`: 路径校验，不在 WORKSPACE_DIR 内则抛出 PermissionError
 
 #### Telegram 封装 (channel/telegram.py)
 - `send_message(chat_id, text)`: 异步发送 Telegram 消息，超 4096 字符自动分段，parse_mode=Markdown
@@ -211,6 +248,21 @@ def execute_tool_call(name, args_json):
 
 ## 更新日志
 
+### v0.5 (2026-04-22)
+
+**LLM Wiki 三层架构 + Skill 技能积累**
+- `templates/` 目录：初始模板由 git 版本控制，与运行时隔离
+- `workspace/` 目录：纯运行时数据，.gitignore 完全忽略
+- `tools/workspace.py`：新增 WORKSPACE_DIR、TEMPLATES_DIR、safe_path()
+- `server.py`：新增 `_ensure_workspace_init()`，启动时复制模板
+- `tools/read_file.py`、`write_file.py`、`edit_file.py`：集成 safe_path() 路径校验
+- 新增 `workspace/wiki/skills/`：技能经验积累机制
+
+**Wiki 维护规范**
+- 知识页：concepts/（概念）、entities/（实体）子目录
+- 技能页：skills/ 子目录，满足条件时自动记录
+- skills/index.md：技能索引，自动同步
+
 ### v0.4 (2026-04-21)
 
 **Telegram Bot 接入（Long Polling 重构）**
@@ -268,4 +320,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-21*
+*最后更新: 2026-04-22*
