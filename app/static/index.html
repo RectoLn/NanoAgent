@@ -696,14 +696,26 @@ createApp({
     };
 
     // ── Meta ──
-    const updateMeta = async () => {
+    const updateMeta = async (applyDefault = false) => {
       const [provider, model] = parseModel(selectedModel.value);
       try {
         const r = await fetch(`/meta?provider=${provider}&model_id=${encodeURIComponent(model)}`);
-        if (r.ok) { const d = await r.json(); ctxLen.value = d.ctx_len ? d.ctx_len.toLocaleString() : '—'; }
+        if (r.ok) {
+          const d = await r.json();
+          ctxLen.value = d.ctx_len ? d.ctx_len.toLocaleString() : '—';
+          // 首次加载：优先 localStorage，其次 config.yaml 的 default_model
+          if (applyDefault) {
+            const saved = localStorage.getItem('selectedModel');
+            selectedModel.value = saved || d.default_model || 'kilo:kilo-auto/free';
+          }
+        }
       } catch { ctxLen.value = '—'; }
     };
-    watch(selectedModel, updateMeta);
+    // 用户切换模型时保存到 localStorage
+    watch(selectedModel, (v) => {
+      localStorage.setItem('selectedModel', v);
+      updateMeta();
+    });
 
     // ── 会话列表 ──
     const fetchSessions = async () => {
@@ -991,7 +1003,7 @@ createApp({
           sessionTaskMap[sid] = localStorage.getItem(k);
         });
 
-      await updateMeta();
+      await updateMeta(true);  // 首次加载，应用默认模型
       await fetchSessions();
       // 恢复上次会话
       const savedSid = localStorage.getItem('currentSessionId');

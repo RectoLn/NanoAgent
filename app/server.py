@@ -194,7 +194,19 @@ def meta(provider: str = Query("kilo"), model_id: str = Query("")):
     except ValueError as e:
         model_name = f"⚠️ {e}"
     ctx_len = int(os.getenv("LLM_CTX_LEN", "32768"))
-    return {"model_id": model_name, "ctx_len": ctx_len}
+
+    # 读取 config.yaml 中的默认模型
+    import yaml
+
+    _cfg_path = Path(__file__).parent / "config.yaml"
+    try:
+        with open(_cfg_path, encoding="utf-8") as f:
+            _cfg = yaml.safe_load(f)
+        default_model = _cfg.get("default", {}).get("model", "kilo:kilo-auto/free")
+    except Exception:
+        default_model = "kilo:kilo-auto/free"
+
+    return {"model_id": model_name, "ctx_len": ctx_len, "default_model": default_model}
 
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}

@@ -1,6 +1,12 @@
 # Agent 配置文件
 # 运行时配置项，与代码分离
 
+# 默认模型（用户首次打开页面时显示的模型）
+# 格式："provider:model_id"，provider 可选 kilo / deepseek
+# 用户在前端切换后会保存到浏览器，优先于此配置
+default:
+  model: "kilo:kilo-auto/free"
+
 # Agent 配置
 agent:
   max_steps: 50
