@@ -64,8 +64,12 @@ def _ensure_workspace_init() -> None:
     """
     将 templates/ 下所有文件复制到 workspace/（仅当目标文件不存在时）。
     保证 Agent 首次运行时有合法的初始状态，且不覆盖已有的运行时数据。
+    同时确保 workspace/skills/ 目录存在（用于存放 ClawHub Skills 定义）。
     """
     from tools.workspace import WORKSPACE_DIR, TEMPLATES_DIR
+
+    # 确保 skills/ 目录存在
+    (WORKSPACE_DIR / "skills").mkdir(parents=True, exist_ok=True)
 
     if not TEMPLATES_DIR.is_dir():
         return
