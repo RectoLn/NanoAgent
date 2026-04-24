@@ -1,4 +1,4 @@
-# NanoAgent v0.5 - 项目进度总结
+# NanoAgent v0.6 - 项目进度总结
 
 ## 项目概述
 
@@ -247,6 +247,20 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.6 (2026-04-24)
+
+**ClawHub Skill 系统优化**
+- 整理技能目录结构：将 `workspace/SKILL.md` 移动到 `workspace/skills/weather/SKILL.md`，区分技能定义与使用经验
+- 新增 `templates/skills/.gitkeep`：确保新项目初始化后 `workspace/skills/` 目录存在
+- 更新 `server.py` `_ensure_workspace_init()`：启动时自动创建 `workspace/skills/` 目录
+- 新增 `tools/install_skill.py`：自动化安装 ClawHub Skill 的工具函数，实现从 URL 下载、解压、依赖检查、文档创建、索引更新
+- 更新 `registry.py`：添加 `install_skill` 工具注册，支持 Tool Call 调用
+- 更新 `prompts/system.md`：新增 ClawHub Skill 安装协议，Agent 收到 ClawHub URL 时自动调用 `install_skill` 工具
+- 确认 `safe_path()` 白名单：`workspace/skills/` 在允许路径内
+
+**Wiki 维护规范更新**
+- 目录职责明确：`skills/{name}/SKILL.md` 为只读技能定义，`wiki/skills/{name}.md` 为可更新使用经验
 
 ### v0.5 (2026-04-22)
 
