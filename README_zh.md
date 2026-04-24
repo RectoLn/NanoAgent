@@ -1,6 +1,6 @@
-# NanoAgent v0.4
+# NanoAgent v0.6
 
-一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册、Web UI 和 Telegram Bot 集成。
+一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册、Web UI、Telegram Bot 集成，以及 ClawHub Skill 技能系统。
 
 > [English](./README.md)
 
@@ -9,6 +9,7 @@
 - **Tool Call 循环**：基于 OpenAI Tool Call 协议的原生工具调用
 - **多模型支持**：DeepSeek (Chat/Reasoner)、Kilo (GPT-4o、Claude 等)
 - **工具系统**：基于 `@tool` 装饰器自动注册
+- **ClawHub Skill 技能系统**：内置 `install_skill` 工具，支持从 ClawHub 自动安装技能
 - **任务管理**：多步骤任务规划与状态跟踪
 - **会话持久化**：独立会话存储，自动保存到 JSON 文件
 - **Web UI**：FastAPI 后端 + Vue 3 前端，流式输出
@@ -131,6 +132,7 @@ app/
 │   ├── edit_file.py
 │   ├── bash.py
 │   ├── web_fetch.py
+│   ├── install_skill.py  # ClawHub Skill 安装
 │   └── todo.py
 ├── prompts/       # Prompt 模板
 │   └── system.md

@@ -1,6 +1,6 @@
-# NanoAgent v0.4
+# NanoAgent v0.6
 
-A minimal ReAct Agent implementation with LLM client, tool registry, web UI, and Telegram Bot integration.
+A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Telegram Bot integration, and ClawHub Skill system.
 
 > [简体中文](./README_zh.md)
 
@@ -9,6 +9,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, and
 - **Tool Call Loop**: Native tool calling based on OpenAI Tool Call protocol
 - **Multi-Provider LLM Support**: DeepSeek (Chat/Reasoner), Kilo (GPT-4o, Claude, etc.)
 - **Tool System**: Auto-registered tools with `@tool` decorator
+- **ClawHub Skill System**: `install_skill` tool for automated skill installation from ClawHub
 - **Todo Management**: Multi-step task planning and tracking
 - **Session Persistence**: Independent session storage with automatic saving to JSON files
 - **Web UI**: FastAPI backend + Vue 3 frontend with stream output
@@ -131,6 +132,7 @@ app/
 │   ├── edit_file.py
 │   ├── bash.py
 │   ├── web_fetch.py
+│   ├── install_skill.py  # ClawHub Skill installation
 │   └── todo.py
 ├── prompts/       # Prompt templates
 │   └── system.md
