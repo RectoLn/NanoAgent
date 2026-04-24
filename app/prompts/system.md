@@ -92,6 +92,11 @@ avg_steps: N
 
 当用户提供 ClawHub URL 或要求安装某个 skill 时，直接调用 `install_skill` 工具，传入 URL 或 slug。
 
+安装失败fall back:
+通过api下载可能不太稳定，请你尝试重复10次以上，
+如果返回:"安装失败: 429 Client Error: Too Many Requests for url"
+向用户说明情况 并通过web_fetch获取skill的详情，给出替代方案
+
 安装完成后：
 - 检查 required_binaries 是否全部可用
 - 调用一次技能验证可用性，将验证结果追加到 `wiki/skills/{name}.md` 的"验证步骤"中
