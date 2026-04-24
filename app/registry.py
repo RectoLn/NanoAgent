@@ -76,6 +76,12 @@ def _exec_web_fetch(url: str = "") -> str:
     return web_fetch(url)
 
 
+def _exec_install_skill(url: str = "") -> str:
+    from tools.install_skill import install_skill
+
+    return install_skill(url)
+
+
 # 工具名 -> kwargs 执行函数
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "bash": _exec_bash,
@@ -86,6 +92,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_current_time": _exec_get_current_time,
     "get_system_info": _exec_get_system_info,
     "web_fetch": _exec_web_fetch,
+    "install_skill": _exec_install_skill,
 }
 
 
@@ -257,6 +264,23 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                     "url": {
                         "type": "string",
                         "description": "目标 URL，例如 'https://httpbin.org/get'",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "install_skill",
+            "description": "安装 ClawHub Skill 到 workspace。支持完整 URL 或 slug。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "ClawHub Skill URL 或 slug，例如 'https://clawhub.ai/steipete/weather' 或 'weather'",
                     }
                 },
                 "required": ["url"],

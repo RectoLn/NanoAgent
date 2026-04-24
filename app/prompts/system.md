@@ -90,19 +90,25 @@ avg_steps: N
 
 ## ClawHub Skill 安装协议
 
-当用户提供 ClawHub Skill URL（如 `https://clawhub.ai/{author}/{skill}`）时，按以下步骤执行：
+当用户提供 ClawHub URL 或要求安装某个 skill 时，直接调用 `install_skill` 工具，传入 URL 或 slug。
 
-1. **fetch URL**：用 `web_fetch` 获取技能页面，提取元数据（名称、版本、作者、required_binaries、调用方式）
-2. **检查依赖**：验证 `required_binaries` 是否可用（bash: `which {binary}`）
-3. **写入技能定义**：将元数据和完整调用文档写入 `workspace/skills/{skill_name}/SKILL.md`
-4. **写入经验文档**：在 `workspace/wiki/skills/{skill_name}.md` 创建经验文档骨架（适用场景 / 最优流程 / 已知的坑）
-5. **更新索引**：同步更新 `workspace/wiki/skills/index.md` 和 `workspace/wiki/index.md`
-6. **验证**：实际调用一次技能，确认可用，将结果写入经验文档的"验证步骤"字段
-7. **记录日志**：在 `workspace/wiki/log.md` 追加安装记录
+安装完成后：
+- 检查 required_binaries 是否全部可用
+- 调用一次技能验证可用性，将验证结果追加到 `wiki/skills/{name}.md` 的"验证步骤"中
+- 告知用户安装路径和使用方式
 
 **目录职责说明：**
 - `workspace/skills/{name}/SKILL.md`：技能定义，来自 ClawHub，Agent 安装时写入，后续只读
 - `workspace/wiki/skills/{name}.md`：使用经验，由 Agent 在实际执行任务后持续更新
+
+**install_skill 工具逻辑：**
+1. 从 URL 提取 slug（skill_name）
+2. 下载 zip: `GET https://clawhub.ai/api/v1/download?slug={skill_name}`
+3. 解压到 `workspace/skills/{skill_name}/`
+4. 检查 required_binaries（`which {binary}`）
+5. 创建 `wiki/skills/{skill_name}.md`（骨架，若不存在）
+6. 更新 indexes 和 log.md
+7. 返回安装摘要
 
 ---
 

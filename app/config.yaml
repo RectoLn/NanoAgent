@@ -9,7 +9,7 @@ default:
 
 # Agent 配置
 agent:
-  max_steps: 50
+  max_steps: 200
   temperature: 0.1
   # 连续 N 轮未调用 todo 工具则注入 <reminder>
   nag_threshold: 3
