@@ -53,7 +53,7 @@ from client import HelloAgentsLLM
 from agent import ToolCallAgent
 from session_manager import SESSION_MGR, Session
 from task_manager import TASK_MGR
-from channel.telegram import send_message as tg_send, start_polling
+from channel.telegram import send_message as tg_send, send_chat_action, start_polling
 import tools  # noqa: F401 触发工具自动注册
 
 
@@ -89,8 +89,14 @@ async def lifespan(app):
     async def _on_tg_message(chat_id: int, text: str):
         await run_and_reply(chat_id, f"tg_{chat_id}", text)
 
-    asyncio.create_task(start_polling(_on_tg_message))
+    polling_task = asyncio.create_task(start_polling(_on_tg_message))
     yield
+    # 服务关闭时干净地取消 polling，避免进程游荡
+    polling_task.cancel()
+    try:
+        await polling_task
+    except asyncio.CancelledError:
+        pass
 
 
 # --- FastAPI 应用 ---
@@ -382,15 +388,34 @@ def chat_stream(
 
 def extract_final_reply(task) -> str:
     """
-    从 task.events 倒序查找最后一条 type=="final" 的事件，返回其 content。
-
-    注意：agent.py 产出的事件格式中没有 type=="text" / role=="assistant" 的事件；
-    最终答案对应的是 type=="final"。若找不到则返回默认提示。
+    从 task.events 中提取最终回复，兜底链：
+      1. 倒序找最后一条 type=="final"（正常路径）
+      2. 拼接所有 type=="answer_chunk"（流式路径兜底）
+      3. 返回最后一条 type=="error" 的内容（错误时给用户明确提示）
+      4. 什么都没有才返回通用兜底文本
     """
+    # 1. 正常路径
     for event in reversed(task.events):
         if event.get("type") == "final":
-            return event.get("content", "")
-    return "✅ 完成，但没有文字输出"
+            content = event.get("content", "")
+            if content:
+                return content
+
+    # 2. 流式片段拼接（极少数情况）
+    chunks = [
+        e["content"]
+        for e in task.events
+        if e.get("type") == "answer_chunk" and e.get("content")
+    ]
+    if chunks:
+        return "".join(chunks)
+
+    # 3. 错误内容透传，让用户知道出了什么问题
+    for event in reversed(task.events):
+        if event.get("type") == "error":
+            return f"⚠️ Agent 执行出错：{event.get('content', '未知错误')}"
+
+    return "（Agent 未产生文字输出）"
 
 
 def _get_tg_session(session_id: str, system_prompt: str) -> Session:
@@ -411,8 +436,10 @@ def _get_tg_session(session_id: str, system_prompt: str) -> Session:
 
 async def run_and_reply(chat_id: int, session_id: str, text: str) -> None:
     """后台协程：调用 Agent 处理消息并将结果发送给 Telegram 用户。"""
-    # 1. 发送"处理中"提示
-    await tg_send(chat_id, "⏳ 处理中...")
+    print(f"[tg] chat_id={chat_id} ← {text[:60]}")
+
+    # 1. 发送"正在输入"状态指示（不发文本）
+    await send_chat_action(chat_id, "typing")
 
     # 2. 获取/创建 session，构造 agent
     agent = _new_agent()
@@ -430,7 +457,10 @@ async def run_and_reply(chat_id: int, session_id: str, text: str) -> None:
     task = TASK_MGR.get_task(task_id)
     reply = extract_final_reply(task)
 
-    # 6. 发送回复
+    # 6. 日志 + 发送
+    status = task.status if task else "unknown"
+    event_types = [e.get("type") for e in (task.events if task else [])]
+    print(f"[tg] chat_id={chat_id} task={status} events={event_types}")
     await tg_send(chat_id, reply)
 
 

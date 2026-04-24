@@ -10,3 +10,4 @@ services:
     ports:
       - "${APP_PORT:-9090}:${APP_PORT:-9090}"   # 通过 .env 的 APP_PORT 控制
     restart: always
+    stop_grace_period: 8s   # 给 lifespan 取消 polling task 的时间（poll 超时 5s + 余量）

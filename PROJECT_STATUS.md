@@ -84,9 +84,11 @@ app/
 
 ### ✅ Telegram Bot 接入
 - **Long Polling**：服务启动即自动开始拉取消息，无需 ngrok 或公网地址
+- **显式开关**：`TELEGRAM_POLLING_ENABLED=true` 才会启动 polling，防止多实例共享 token 时意外抢占
 - **Webhook 备用**：`POST /webhook/telegram` 路由保留，可随时切换
 - **独立会话**：每个 Telegram 用户独立 session（session_id = `tg_{chat_id}`）
 - **异步处理**：每条消息独立 Task，互不阻塞
+- **HTML 格式渲染**：LLM Markdown 自动转换为 Telegram HTML（支持代码块、粗体、斜体），降级为纯文本兜底
 - **长消息分段**：超过 4096 字符自动分段发送
 
 ### ✅ LLM Wiki 三层架构 + Skill 技能积累
@@ -189,8 +191,10 @@ app/
 - `safe_path(path)`: 路径校验，不在 WORKSPACE_DIR 内则抛出 PermissionError
 
 #### Telegram 封装 (channel/telegram.py)
-- `send_message(chat_id, text)`: 异步发送 Telegram 消息，超 4096 字符自动分段，parse_mode=Markdown
-- `start_polling(on_message)`: Long Polling 主循环，`getUpdates(offset, timeout=30)`，收到文字消息调用 `on_message(chat_id, text)` 回调
+- `send_message(chat_id, text)`: 异步发送 Telegram 消息，LLM Markdown → HTML 转换，降级纯文本兜底，超 4096 字符自动分段
+- `start_polling(on_message)`: Long Polling 主循环，需 `TELEGRAM_POLLING_ENABLED=true` 才启动，`getUpdates(offset, timeout=30)` 长轮询
+- `_md_to_html(text)`: LLM CommonMark → Telegram HTML 转换（代码块、行内代码、粗体、斜体）
+- `_polling_enabled()`: 检测 `TELEGRAM_POLLING_ENABLED` 环境变量
 
 #### 前端公共函数 (static/index.html)
 - `attachStreamHandlers(es, opts)`: 统一绑定 SSE `onmessage`/`onerror`，`send` 和 `resumeTask` 共用
@@ -203,6 +207,7 @@ app/
 - `LLM_MODEL_ID`: 默认模型 ID
 - `DEEPSEEK_API_KEY`: DeepSeek API Key
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot Token（由 @BotFather 获取，可选）
+- `TELEGRAM_POLLING_ENABLED`: 设为 `true` 才启动 Long Polling（默认 false，防多实例抢占）
 
 #### 全局状态
 - `SESSION_MGR`: SessionManager 单例
@@ -247,6 +252,23 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.8 (2026-04-24)
+
+**Telegram 渲染修复（MarkdownV2 三级降级）**
+- `channel/telegram.py`：重写消息格式化，采用 Telegram MarkdownV2 作为首选格式，支持标题、表格（转等宽代码块）、列表、粗体、斜体、行内代码、围栏代码块
+- 新增 `_escape_v2`、`_escape_code_v2`、`_process_inline_v2`、`_md_to_markdownv2`、`_md_to_html_simple` 五个辅助函数
+- `send_message` 实现三级降级链：MarkdownV2 → HTML → 纯文本，每级失败（400）时打日志并自动尝试下一级
+- 表格处理：先剥离行内格式（**bold**、*italic*、\`code\`），再放入等宽代码块，避免内部出现转义字符
+- 围栏代码块：不携带语言标识（如 ```python），防止 Telegram 解析异常（`</>` 图标）
+- `.env.example`：保留 `TELEGRAM_POLLING_ENABLED=false` 说明
+
+### v0.7 (2026-04-24)
+
+**Telegram 稳定性修复**
+- `channel/telegram.py`：新增 `TELEGRAM_POLLING_ENABLED=true` 显式开关，token 存在但未开启时静默跳过，防止多实例（9090/9091）共享 token 互相抢占 updates
+- `channel/telegram.py`：新增 `_md_to_html()` 转换函数，将 LLM CommonMark 输出转为 Telegram HTML（围栏代码块、行内代码、`**bold**`、`*italic*`），`send_message` 改用 HTML 模式发送，400 时降级纯文本
+- `.env.example`：新增 `TELEGRAM_POLLING_ENABLED=false` 字段说明
 
 ### v0.6 (2026-04-24)
 
@@ -334,4 +356,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-22*
+*最后更新: 2026-04-24*
