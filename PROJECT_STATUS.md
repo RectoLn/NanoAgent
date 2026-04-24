@@ -252,8 +252,7 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
-
-### v0.8 (2026-04-24)
+### v0.6 (2026-04-24)
 
 **Telegram 渲染修复（MarkdownV2 三级降级）**
 - `channel/telegram.py`：重写消息格式化，采用 Telegram MarkdownV2 作为首选格式，支持标题、表格（转等宽代码块）、列表、粗体、斜体、行内代码、围栏代码块
@@ -263,14 +262,10 @@ def execute_tool_call(name, args_json):
 - 围栏代码块：不携带语言标识（如 ```python），防止 Telegram 解析异常（`</>` 图标）
 - `.env.example`：保留 `TELEGRAM_POLLING_ENABLED=false` 说明
 
-### v0.7 (2026-04-24)
-
 **Telegram 稳定性修复**
 - `channel/telegram.py`：新增 `TELEGRAM_POLLING_ENABLED=true` 显式开关，token 存在但未开启时静默跳过，防止多实例（9090/9091）共享 token 互相抢占 updates
 - `channel/telegram.py`：新增 `_md_to_html()` 转换函数，将 LLM CommonMark 输出转为 Telegram HTML（围栏代码块、行内代码、`**bold**`、`*italic*`），`send_message` 改用 HTML 模式发送，400 时降级纯文本
 - `.env.example`：新增 `TELEGRAM_POLLING_ENABLED=false` 字段说明
-
-### v0.6 (2026-04-24)
 
 **ClawHub Skill 系统优化**
 - 整理技能目录结构：将 `workspace/SKILL.md` 移动到 `workspace/skills/weather/SKILL.md`，区分技能定义与使用经验
