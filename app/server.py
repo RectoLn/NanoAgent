@@ -449,9 +449,13 @@ async def run_and_reply(chat_id: int, session_id: str, text: str) -> None:
     # 3. 启动后台任务（在独立线程运行 agent）
     task_id = TASK_MGR.start_task(session_id, text, agent, history)
 
-    # 4. 轮询直到任务完成
+    # 4. 轮询直到任务完成，每 4 秒续发 typing（Telegram typing 状态只持续 ~5 秒）
+    elapsed = 0
     while not TASK_MGR.is_task_done(task_id):
         await asyncio.sleep(1)
+        elapsed += 1
+        if elapsed % 4 == 0:
+            await send_chat_action(chat_id, "typing")
 
     # 5. 提取最终回复
     task = TASK_MGR.get_task(task_id)
