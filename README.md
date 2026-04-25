@@ -1,4 +1,4 @@
-# NanoAgent v0.6
+# NanoAgent v0.7
 
 A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Telegram Bot integration, and ClawHub Skill system.
 
@@ -15,6 +15,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Web UI**: FastAPI backend + Vue 3 frontend with stream output
 - **Markov Streaming**: Real-time token-by-token output
 - **Telegram Bot**: Long Polling integration—send messages to Bot, get Agent responses directly in Telegram (no ngrok required)
+- **Context Compression**: Automatic context summarization for extended conversations, prevents token limit overflow
 
 ## Quick Start
 
@@ -64,16 +65,28 @@ Agent behavior can be customized via `app/config.yaml`:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `agent.max_steps` | Maximum reasoning steps per query | 50 |
+| `agent.max_steps` | Maximum reasoning steps per query | 200 |
 | `agent.temperature` | LLM temperature (creativity vs consistency) | 0.1 |
+| `agent.max_tokens` | Max output tokens per LLM call | 16384 |
 | `agent.nag_threshold` | Rounds without todo tool before reminder injection | 3 |
+| `context.compress_threshold_tokens` | Trigger compression when non-system messages exceed N words | 6000 |
+| `context.compress_threshold_messages` | Trigger compression when non-system messages exceed N | 30 |
+| `context.keep_recent_messages` | Always preserve the N most recent messages (not compressed) | 10 |
+| `context.compression_enabled` | Toggle automatic context compression (false for debugging) | true |
 
 **Example config.yaml:**
 ```yaml
 agent:
-  max_steps: 50
+  max_steps: 200
   temperature: 0.1
+  max_tokens: 16384
   nag_threshold: 3
+
+context:
+  compress_threshold_tokens: 6000
+  compress_threshold_messages: 30
+  keep_recent_messages: 10
+  compression_enabled: true
 ```
 
 ## Telegram Bot
@@ -132,6 +145,7 @@ app/
 │   ├── edit_file.py
 │   ├── bash.py
 │   ├── web_fetch.py
+│   ├── summarize.py      # Context compression utilities
 │   ├── install_skill.py  # ClawHub Skill installation
 │   └── todo.py
 ├── prompts/       # Prompt templates

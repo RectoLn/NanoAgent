@@ -1,4 +1,4 @@
-# NanoAgent v0.6
+# NanoAgent v0.7
 
 一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册、Web UI、Telegram Bot 集成，以及 ClawHub Skill 技能系统。
 
@@ -15,6 +15,7 @@
 - **Web UI**：FastAPI 后端 + Vue 3 前端，流式输出
 - **实时流式**：逐 token 实时输出
 - **Telegram Bot**：基于 Long Polling 的消息平台集成（无需公网地址），在 Telegram 中直接与 Agent 对话
+- **上下文压缩**：自动压缩长对话历史为智能摘要，防止 token 溢出，压缩记录内置存储于会话文件
 
 ## 快速开始
 
@@ -64,16 +65,28 @@ Agent 行为可以通过 `app/config.yaml` 自定义：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `agent.max_steps` | 每次查询的最大推理步骤 | 50 |
+| `agent.max_steps` | 每次查询的最大推理步骤 | 200 |
 | `agent.temperature` | LLM 温度参数（创造性 vs 一致性） | 0.1 |
+| `agent.max_tokens` | 每次 LLM 调用的最大输出 token 数 | 16384 |
 | `agent.nag_threshold` | 未调用 todo 工具的连续轮数阈值（注入提醒） | 3 |
+| `context.compress_threshold_tokens` | 触发压缩的词数阈值（非 system 消息） | 6000 |
+| `context.compress_threshold_messages` | 触发压缩的消息数阈值（非 system 消息） | 30 |
+| `context.keep_recent_messages` | 每次压缩保留的最近消息数（不压缩） | 10 |
+| `context.compression_enabled` | 启用/禁用自动压缩（false 用于调试） | true |
 
 **config.yaml 示例：**
 ```yaml
 agent:
-  max_steps: 50
+  max_steps: 200
   temperature: 0.1
+  max_tokens: 16384
   nag_threshold: 3
+
+context:
+  compress_threshold_tokens: 6000
+  compress_threshold_messages: 30
+  keep_recent_messages: 10
+  compression_enabled: true
 ```
 
 ## Telegram Bot
@@ -132,6 +145,7 @@ app/
 │   ├── edit_file.py
 │   ├── bash.py
 │   ├── web_fetch.py
+│   ├── summarize.py      # 上下文压缩工具
 │   ├── install_skill.py  # ClawHub Skill 安装
 │   └── todo.py
 ├── prompts/       # Prompt 模板

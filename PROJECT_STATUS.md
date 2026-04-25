@@ -1,4 +1,4 @@
-# NanoAgent v0.6 - 项目进度总结
+# NanoAgent v0.7 - 项目进度总结
 
 ## 项目概述
 
@@ -26,6 +26,7 @@ app/
 │   ├── web_fetch.py     # 网页抓取
 │   ├── write_file.py    # 文件写入
 │   ├── todo.py          # Todo 管理
+│   ├── summarize.py     # 上下文压缩工具（内部使用，非 LLM 可见）
 │   └── workspace.py     # 安全沙箱（safe_path 路径校验）
 ├── static/               # 前端资源
 │   └── index.html       # Vue 3 单页应用
@@ -130,7 +131,7 @@ app/
 
 ### 🔄 长期愿景 (P2 - 高级特性)
 1. **上下文压缩** 
-   - 🔄 计划：长对话上下文压缩和摘要
+   - ✅ 已完成：自动压缩触发、LLM 摘要生成、compression.md 审计日志
    - 目标：突破 LLM token 限制，支持超长对话
 
 2. **定时任务** 
@@ -252,6 +253,33 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+### v0.7 (2026-04-25)
+
+**上下文压缩机制 · 从文件存储改为 Session JSON 内置 + Token 溢出修复**
+
+**根本问题修复**：
+- `config.yaml`：`agent.max_tokens: 4096` → `16384`（长任务常规参数容易触发截断）
+- `agent.py`：`finish_reason == "length"` 改为分流处理：
+  - 纯文本被截断 → 直接输出现有内容作为最终答案（不续写，避免 context 堆积）
+  - 工具参数被截断 → 报错提示调高 `max_tokens`
+- `config.yaml`：压缩阈值从 25000 词/50 消息降至 **6000 词/30 消息**（安全上限：32K ctx - 16K max_tokens = 16K 可用，中文 ÷1.5 = 10.7K 词，再除以 1.5 安全系数 ≈ 7K）
+
+**压缩机制重构 · 数据存储改为自包含**：
+- `tools/summarize.py`：新增 `format_messages_for_summary()`，将消息列表格式化为可读文本供 LLM 摘要
+- `session_manager.py`：`Session` 类新增 `compression_history: List[Dict]` 字段 + `add_compression_record()` 方法；`_save_session()` 和 `_load()` 完整支持压缩历史序列化/反序列化
+- `agent.py`：
+  - `_compress_context()` 改为返回 `(new_history, log_data)` 元组
+  - `run_iter()` 中 `yield {"type": "compression_log", **log_data}` 事件（不再写文件）
+  - 删除 `_log_compression()` 文件操作方法
+- `task_manager.py`：处理 `compression_log` 事件，自动调用 `session.add_compression_record()` 并保存
+- 删除 `templates/wiki/compression.md`：无需全局日志文件，压缩记录随 session 生存销毁
+
+**设计完成方案**：
+- 每个 session 有独立的 `compression_history` 数组，记录对应会话的所有压缩操作
+- 格式：`{timestamp, original_count, compressed_count, compressed_msg_count, token_saved, summary}`
+- session 删除时自动清理相关压缩记录，避免孤儿数据
+- 用户可通过 `/sessions/{sid}` API 查看 `compression_history` 审计完整压缩历史
+
 ### v0.6 (2026-04-24)
 
 **Telegram 渲染修复（MarkdownV2 三级降级）**
@@ -351,4 +379,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-24*
+*最后更新: 2026-04-25*

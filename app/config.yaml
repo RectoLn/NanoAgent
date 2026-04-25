@@ -11,6 +11,9 @@ default:
 agent:
   max_steps: 200
   temperature: 0.1
+  # 单次 LLM 调用允许输出的最大 token 数
+  # 4096 太小，复杂任务（工具参数 + 长推理）容易触顶被截断
+  max_tokens: 16384
   # 连续 N 轮未调用 todo 工具则注入 <reminder>
   nag_threshold: 3
 
@@ -25,3 +28,20 @@ llm:
 # Prompt 文件路径（相对于 app 目录）
 prompts:
   system: "prompts/system.md"
+
+# 上下文压缩配置
+context:
+  # 压缩触发阈值（满足任一条件即触发）
+  #
+  # 安全上限计算（默认 32K 上下文模型）：
+  #   可用 input token ≈ ctx_len(32768) - max_tokens(16384) = 16384
+  #   中文 token ≈ 1.5~2 个 token/词，word 阈值 = 16384 / 1.5 / 安全系数(1.5) ≈ 7000
+  #   取 6000 留出充足余地给 system prompt 和新消息
+  compress_threshold_tokens: 6000     # 非 system 消息估算词数超过此值触发压缩
+  compress_threshold_messages: 30     # 非 system 消息条数超过此值触发压缩
+
+  # 压缩保留策略
+  keep_recent_messages: 10            # 总是保留最近 N 条消息不压缩
+
+  # 全局开关（false 可完全禁用压缩，用于调试）
+  compression_enabled: true

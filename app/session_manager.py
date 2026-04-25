@@ -33,6 +33,8 @@ class Session:
         self.system_prompt = system_prompt
         self.messages: List[Dict[str, Any]] = []
         self.tasks: List[Dict[str, Any]] = []
+        # 上下文压缩历史，每条压缩操作追加一条记录
+        self.compression_history: List[Dict[str, Any]] = []
 
     def add_message(self, msg: Dict[str, Any]):
         """追加一条消息到历史。"""
@@ -69,6 +71,38 @@ class Session:
             "tasks": self.tasks,
         }
 
+    def should_compress(
+        self,
+        token_threshold: int = 6000,
+        message_threshold: int = 30,
+    ) -> bool:
+        """
+        判断是否需要压缩上下文。
+        - 消息数超过 message_threshold，或
+        - 估算 token 数超过 token_threshold
+        注：token 用空格分词粗估，实际 token 数偏低，留出余地。
+        """
+        if len(self.messages) > message_threshold:
+            return True
+        token_count = sum(
+            len((msg.get("content") or "").split()) for msg in self.messages
+        )
+        return token_count > token_threshold
+
+    def add_compression_record(self, record: Dict[str, Any]) -> None:
+        """追加一条压缩记录，字段由调用方提供。"""
+        self.compression_history.append(record)
+        self.updated_at = datetime.now().isoformat()
+
+    def get_compression_candidates(self, keep_recent: int = 10) -> List[Dict]:
+        """
+        返回可压缩的消息段（保留最近 keep_recent 条，压缩其余部分）。
+        若消息总数不足，返回空列表表示无需压缩。
+        """
+        if len(self.messages) <= keep_recent + 5:
+            return []
+        return self.messages[:-keep_recent]
+
 
 class SessionManager:
     """持久化会话管理器（保存到 sessions/ 文件夹）。"""
@@ -92,10 +126,11 @@ class SessionManager:
             "system_prompt": s.system_prompt,
             "messages": s.messages,
             "tasks": s.tasks,
+            "compression_history": s.compression_history,
         }
         file_path = self._dir / f"{session_id}.json"
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"保存 session {session_id} 失败: {e}")
@@ -104,7 +139,7 @@ class SessionManager:
         """扫描 sessions/ 文件夹加载所有 sessions。"""
         for file_path in self._dir.glob("*.json"):
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     d = json.load(f)
                 sid = d["session_id"]
                 s = Session(sid, d.get("system_prompt", ""))
@@ -113,6 +148,7 @@ class SessionManager:
                 s.updated_at = d.get("updated_at", datetime.now().isoformat())
                 s.messages = d.get("messages", [])
                 s.tasks = d.get("tasks", [])
+                s.compression_history = d.get("compression_history", [])
                 self._sessions[sid] = s
             except Exception as e:
                 print(f"加载 session {file_path.name} 失败: {e}")
@@ -129,7 +165,9 @@ class SessionManager:
         """按 ID 获取会话，不存在返回 None。"""
         return self._sessions.get(session_id)
 
-    def get_or_create(self, session_id: Optional[str], system_prompt: str = "") -> Session:
+    def get_or_create(
+        self, session_id: Optional[str], system_prompt: str = ""
+    ) -> Session:
         """若 session_id 存在则取出，否则新建。"""
         if session_id and session_id in self._sessions:
             return self._sessions[session_id]
