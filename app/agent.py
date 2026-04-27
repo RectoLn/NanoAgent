@@ -101,6 +101,8 @@ class ToolCallAgent:
 
         # 每个 Agent 持有独立的 TodoManager 实例（而非全局单例）
         self.todo = TodoManager()
+        if self.session and getattr(self.session, "tasks", None):
+            self.todo.items = [dict(item) for item in self.session.tasks]
 
     # ── 上下文压缩：三层策略 ──────────────────────────────────────────────────
 
@@ -112,8 +114,43 @@ class ToolCallAgent:
         total = 0
         for msg in messages:
             content = msg.get("content", "") or ""
-            total += len(content.split()) * 1.3
+            text_cost = max(len(content.split()) * 1.3, len(content) / 4)
+            total += text_cost
+            if msg.get("tool_calls"):
+                total += len(json.dumps(msg["tool_calls"], ensure_ascii=False)) / 4
+            if msg.get("tool_call_id"):
+                total += len(str(msg["tool_call_id"])) / 4
         return int(total)
+
+    def _build_compacted_messages(self, messages: List[Dict], summary: str) -> List[Dict]:
+        system_messages = [m for m in messages if m.get("role") == "system"]
+        user_messages = [m for m in messages if m.get("role") == "user"]
+
+        new_messages: List[Dict] = []
+        if system_messages:
+            new_messages.extend(system_messages)
+        elif self.system_prompt:
+            new_messages.append({"role": "system", "content": self.system_prompt})
+
+        first_user = user_messages[0] if user_messages else None
+        latest_user = user_messages[-1] if user_messages else None
+        if first_user:
+            new_messages.append(first_user)
+
+        summary_content = f"{self.summary_prefix}{summary}"
+        new_messages.append({"role": self.summary_role, "content": summary_content})
+
+        if not self.todo.is_empty():
+            task_status = (
+                "[Current task status - authoritative]\n\n"
+                f"{self.todo.render()}"
+            )
+            new_messages.append({"role": "user", "content": task_status})
+
+        if latest_user and latest_user is not first_user:
+            new_messages.append(latest_user)
+
+        return new_messages
 
     def micro_compact(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -132,7 +169,6 @@ class ToolCallAgent:
             return messages
 
         # 需要保留的索引集合（最近 N 条）
-        keep_indices = {idx for idx, _ in tool_entries[-self.l1_keep_recent:]}
         new_messages = list(messages)  # 复制
 
         # 处理旧 tool 消息
@@ -206,8 +242,7 @@ class ToolCallAgent:
             summary = summary[:self.l2_summary_max_chars] + "…"
 
         # 3. 替换 messages
-        summary_content = f"{self.summary_prefix}{summary}"
-        new_messages = [{"role": self.summary_role, "content": summary_content}]
+        new_messages = self._build_compacted_messages(messages, summary)
 
         # 4. 记录 compression_history
         if self.session:
@@ -263,6 +298,7 @@ class ToolCallAgent:
 
         # 记录本轮新增消息（不含历史），供 session 保存
         new_messages: List[Dict] = [{"role": "user", "content": question}]
+        round_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for step in range(1, self.max_steps + 1):
             # ── Layer 1：micro_compact 每次 LLM 调用前静默执行 ─────────────
@@ -275,10 +311,11 @@ class ToolCallAgent:
                 msg_count = len(non_system)
 
                 # 优先使用精准 prompt_tokens（如果可用），否则估算
+                estimated_tokens = self.estimate_tokens(non_system)
                 if self.last_precise_prompt_tokens is not None:
-                    token_count = self.last_precise_prompt_tokens
+                    token_count = max(self.last_precise_prompt_tokens, estimated_tokens)
                 else:
-                    token_count = self.estimate_tokens(non_system)
+                    token_count = estimated_tokens
 
                 if token_count > self.l2_token_threshold or msg_count > self.l2_message_threshold:
                     messages = self.auto_compact(messages)
@@ -305,6 +342,9 @@ class ToolCallAgent:
 
             choice = response["choice"]
             usage = response["usage"]
+            round_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            round_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+            round_usage["total_tokens"] += usage.get("total_tokens", 0)
 
             # 更新精准 prompt_tokens 记录（用于压缩决策）
             self.last_precise_prompt_tokens = usage.get("prompt_tokens", 0)
@@ -323,7 +363,9 @@ class ToolCallAgent:
                 yield {
                     "type": "token_update",
                     "usage": usage,
+                    "round_usage": round_usage.copy(),
                     "total_usage": self.session.token_usage.copy(),
+                    "context_usage": self.session.context_usage.copy(),
                 }
 
             message = choice.message
@@ -373,6 +415,7 @@ class ToolCallAgent:
                 # msg_dict 已在上面加入 new_messages，但 content 可能为空，需修正最后一条
                 if new_messages and new_messages[-1].get("role") == "assistant":
                     new_messages[-1]["content"] = final_text
+                    new_messages[-1]["usage"] = round_usage.copy()
 
                 yield {"type": "new_messages", "messages": new_messages}
                 yield {"type": "done"}
@@ -434,6 +477,7 @@ class ToolCallAgent:
                     # 修正 new_messages 里已追加的 assistant msg（content 可能为空）
                     if new_messages and new_messages[-1].get("role") == "assistant":
                         new_messages[-1]["content"] = final_text
+                        new_messages[-1]["usage"] = round_usage.copy()
                     print(f"[Agent] step={step} 文本输出被截断，以现有内容作为最终答案")
                     yield {"type": "final", "content": final_text}
                     yield {"type": "new_messages", "messages": new_messages}

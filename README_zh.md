@@ -1,4 +1,4 @@
-# NanoAgent v0.7
+# NanoAgent v0.8
 
 一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册、Web UI、Telegram Bot 集成，以及 ClawHub Skill 技能系统。
 
@@ -16,6 +16,18 @@
 - **实时流式**：逐 token 实时输出
 - **Telegram Bot**：基于 Long Polling 的消息平台集成（无需公网地址），在 Telegram 中直接与 Agent 对话
 - **上下文压缩**：自动压缩长对话历史为智能摘要，防止 token 溢出，压缩记录内置存储于会话文件
+- **上下文压缩锚点**：压缩后保留 system prompt、初始用户输入、最新用户输入，以及当前权威 Todo/任务状态。
+- **Token 统计持久化**：回答卡片保存本轮 usage，刷新或切换会话后仍可恢复；会话列表区分当前上下文窗口占用和会话累计消耗。
+
+## 上下文与 Token 统计
+
+NanoAgent 将三个容易混淆的 token 指标拆开处理：
+
+- **单轮回答 usage**：写入 assistant message 的 `usage` 字段，用于恢复回答卡片上的输入/输出 token。
+- **当前上下文窗口**：写入 session 的 `context_usage` 字段，表示最近一次请求的 prompt/window 占用，前端显示为 `ctx 当前 / 模型窗口`。
+- **会话累计消耗**：写入 session 的 `token_usage` 字段，表示整个会话累计花费，可超过模型窗口，只作为成本/历史统计。
+
+上下文压缩不会只留下单条摘要，而是保留稳定锚点：system prompt、第一条用户请求、压缩摘要、当前 Todo/任务状态、最新用户请求。
 
 ## 快速开始
 

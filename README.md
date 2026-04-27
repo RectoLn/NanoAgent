@@ -1,4 +1,4 @@
-# NanoAgent v0.7
+# NanoAgent v0.8
 
 A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Telegram Bot integration, and ClawHub Skill system.
 
@@ -16,6 +16,18 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Markov Streaming**: Real-time token-by-token output
 - **Telegram Bot**: Long Polling integration—send messages to Bot, get Agent responses directly in Telegram (no ngrok required)
 - **Context Compression**: Automatic context summarization for extended conversations, prevents token limit overflow
+- **Context-Aware Compaction Anchors**: Compacted history preserves the system prompt, initial user request, latest user request, and authoritative task status
+- **Token Usage Tracking**: Per-answer token usage is persisted, while session lists show current context-window usage separately from lifetime token spend
+
+## Context and Token Handling
+
+NanoAgent separates three related but different token concepts:
+
+- **Per-answer usage**: Stored on assistant messages as `usage`, so answer cards keep their input/output token counts after refresh or session switching.
+- **Current context usage**: Stored as `context_usage`, representing the latest prompt/window footprint shown as `ctx current / model context length` in the session list.
+- **Lifetime usage**: Stored as `token_usage`, representing cumulative tokens spent by the whole session. This can exceed the model context length and is shown as supporting metadata rather than the active window size.
+
+When context is compacted, NanoAgent keeps stable anchors instead of replacing everything with a single summary: system prompt, first user request, compacted summary, current todo/task status, and latest user request.
 
 ## Quick Start
 

@@ -41,6 +41,11 @@ class Session:
             "total_completion_tokens": 0,
             "total_tokens": 0,
         }
+        self.context_usage: Dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
     def add_message(self, msg: Dict[str, Any]):
         """追加一条消息到历史。"""
@@ -68,6 +73,7 @@ class Session:
             "updated_at": self.updated_at,
             "message_count": len(self.messages),
             "token_usage": self.token_usage.copy(),
+            "context_usage": self.context_usage.copy(),
         }
 
     def history_to_dict(self) -> Dict[str, Any]:
@@ -106,6 +112,11 @@ class Session:
         self.token_usage["total_prompt_tokens"] += prompt_tokens
         self.token_usage["total_completion_tokens"] += completion_tokens
         self.token_usage["total_tokens"] += total_tokens
+        self.context_usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
         self.updated_at = datetime.now().isoformat()
 
     def get_compression_candidates(self, keep_recent: int = 10) -> List[Dict]:
@@ -142,6 +153,7 @@ class SessionManager:
             "tasks": s.tasks,
             "compression_history": s.compression_history,
             "token_usage": s.token_usage,
+            "context_usage": s.context_usage,
         }
         file_path = self._dir / f"{session_id}.json"
         try:
@@ -167,6 +179,11 @@ class SessionManager:
                 s.token_usage = d.get("token_usage", {
                     "total_prompt_tokens": 0,
                     "total_completion_tokens": 0,
+                    "total_tokens": 0,
+                })
+                s.context_usage = d.get("context_usage", {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
                     "total_tokens": 0,
                 })
                 self._sessions[sid] = s

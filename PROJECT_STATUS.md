@@ -1,4 +1,4 @@
-# NanoAgent v0.7 - 项目进度总结
+﻿# NanoAgent v0.8 - 项目进度总结
 
 ## 项目概述
 
@@ -253,6 +253,7 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
 ### v0.8 (2026-04-27)
 
 **上下文压缩升级 · 三层策略架构**
@@ -278,6 +279,24 @@ def execute_tool_call(name, args_json):
 - `layer2.summary.temperature: 0.1` - 摘要生成的一致性参数
 - `layer2.summary.max_tokens: 1000` - 摘要的最大长度
 - `layer2.summary.max_chars: 800` - 摘要的字符数上限
+
+
+**上下文压缩与 Token 统计修正**
+
+**上下文压缩锚点增强**：
+- `agent.py`：`auto_compact()` 压缩后的 messages 不再只保留单条摘要，而是保留 system prompt、第一条用户请求、压缩摘要、当前 Todo/任务状态、最新用户请求。
+- `agent.py`：新建 Agent 时从 `session.tasks` 恢复 `self.todo.items`，避免跨请求后 Todo 状态丢失。
+- `agent.py`：token 估算从纯空格分词扩展为 `max(words * 1.3, chars / 4)`，并纳入 `tool_calls` / `tool_call_id` 的结构成本，降低中文和工具调用场景下的低估风险。
+
+**Token 统计拆分**：
+- `session_manager.py`：保留 `token_usage` 作为会话累计消耗，新增 `context_usage` 表示最近一次 LLM 请求的当前上下文窗口占用。
+- `agent.py`：`token_update` SSE 事件新增 `round_usage` 与 `context_usage`；最终 assistant message 写入 `usage`，用于刷新或切换会话后恢复回答卡片 token。
+- `index.html`：会话列表显示 `ctx 当前窗口 / 模型窗口`，累计消耗通过 hover tooltip 查看；回答卡片从持久化 `msg.usage` 恢复单轮 token。
+
+**前端 per-session loading 修正**：
+- `index.html`：SSE handler 绑定创建时的 `sid` 和 `EventSource`，旧流事件不再误清新会话 loading，也不会污染当前 timeline。
+- `index.html`：Landing 页发送按钮移除 `sessionLoading[null]`，避免新会话首条消息 loading 状态不一致。
+
 
 ### v0.7 (2026-04-25)
 
@@ -405,4 +424,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-25*
+*最后更新: 2026-04-27*

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -488,8 +488,8 @@ html, body {
               <div class="session-item-title">{{ s.title }}</div>
               <div class="session-item-meta">
                 {{ s.message_count }} 条消息
-                <span v-if="s.token_usage && s.token_usage.total_tokens > 0">
-                  · {{ s.token_usage.total_tokens.toLocaleString() }} / {{ ctxLen }} tokens
+                <span v-if="s.context_usage && s.context_usage.prompt_tokens > 0" :title="sessionTokenTitle(s)">
+                  ctx {{ formatTokens(s.context_usage.prompt_tokens) }} / {{ ctxLen }}
                 </span>
               </div>
             </div>
@@ -527,7 +527,7 @@ html, body {
                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
                </svg>
              </button>
-             <button class="send-btn" @click="send" :disabled="!question.trim() || sessionLoading[null]">
+             <button class="send-btn" @click="send" :disabled="!question.trim()">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
               </svg>
@@ -756,7 +756,7 @@ createApp({
 
     const switchSession = async (sid) => {
       if (sid === currentSessionId.value) return;
-      if (currentEventSource) currentEventSource.close();
+      if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
       try {
         const r = await fetch(`/sessions/${sid}`);
         if (!r.ok) return;
@@ -787,7 +787,7 @@ createApp({
                 timeline.push(card);
               }
             } else if (msg.content) {
-              timeline.push({ kind: 'final', content: msg.content });
+              timeline.push({ kind: 'final', content: msg.content, roundUsage: msg.usage || null });
             }
           } else if (msg.role === 'tool') {
             const c = cardMap[msg.tool_call_id];
@@ -854,7 +854,7 @@ createApp({
       try {
         await fetch(`/sessions/${sid}`, { method: 'DELETE' });
         if (sid === currentSessionId.value) {
-          if (currentEventSource) currentEventSource.close();
+          if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
           resetAll();
         }
         // 删除该会话的任务映射
@@ -867,6 +867,12 @@ createApp({
     // ── 工具函数 ──
     const scrollBottom = () => nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; });
     const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n) + '…' : (s || '');
+    const formatTokens = (n) => Number(n || 0).toLocaleString();
+    const sessionTokenTitle = (s) => {
+      const context = s.context_usage?.prompt_tokens || 0;
+      const total = s.token_usage?.total_tokens || 0;
+      return `Current context: ${formatTokens(context)} tokens\nTotal spent: ${formatTokens(total)} tokens`;
+    };
     const escapeHtml = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const renderMarkdown = (content) => {
       if (!content) return '';
@@ -900,20 +906,23 @@ createApp({
     // opts.onTaskId:    task_id 事件回调（send 专用）
     // opts.onFinal:     final 事件后的额外回调（如 fetchSessions）
      const attachStreamHandlers = (es, opts = {}) => {
+       let streamSid = opts.sid || currentSessionId.value;
        let finalItem = null;
        let lastRoundUsage = null; // 存储最近一轮的 token 使用情况
        es.onmessage = (e) => {
+        if (currentEventSource !== es) return;
         try {
           const ev = JSON.parse(e.data);
 
           // 更新 lastEventIndex（对于非 new_messages 事件）
-          if (currentSessionId.value && sessionTaskMap[currentSessionId.value] && ev.type !== 'new_messages') {
-            sessionTaskMap[currentSessionId.value].lastEventIndex++;
-            localStorage.setItem('task_map_' + currentSessionId.value, JSON.stringify(sessionTaskMap[currentSessionId.value]));
+          if (streamSid && sessionTaskMap[streamSid] && ev.type !== 'new_messages') {
+            sessionTaskMap[streamSid].lastEventIndex++;
+            localStorage.setItem('task_map_' + streamSid, JSON.stringify(sessionTaskMap[streamSid]));
           }
 
           switch (ev.type) {
             case 'session_id':
+              streamSid = ev.session_id || streamSid;
               if (opts.onSessionId) opts.onSessionId(ev);
               break;
             case 'task_id':
@@ -983,21 +992,25 @@ createApp({
                   const session = sessions.find(s => s.session_id === currentSessionId.value);
                   if (session) {
                     session.token_usage = ev.total_usage;
+                    session.context_usage = ev.context_usage;
                   }
                 }
                 // 存储最近一轮的token使用（用于final显示）
-                lastRoundUsage = ev.usage;
+                lastRoundUsage = ev.round_usage || ev.usage;
                 break;
              case 'done':
               closeAllCards();
-              currentEventSource.close(); currentEventSource = null;
-              if (currentSessionId.value) sessionLoading[currentSessionId.value] = false;
+              if (currentEventSource === es) {
+                currentEventSource.close();
+                currentEventSource = null;
+              }
+              if (streamSid) sessionLoading[streamSid] = false;
               finalItem = null;
               if (opts.onDone) opts.onDone();
               // 任务完成时清理 sessionTaskMap
-              if (currentSessionId.value) {
-                delete sessionTaskMap[currentSessionId.value];
-                localStorage.removeItem('task_map_' + currentSessionId.value);
+              if (streamSid) {
+                delete sessionTaskMap[streamSid];
+                localStorage.removeItem('task_map_' + streamSid);
               }
               break;
           }
@@ -1005,16 +1018,16 @@ createApp({
       };
        es.onerror = (e) => {
          // 若 currentEventSource 已被 done 处理清空，说明正常结束后浏览器触发的多余 onerror，静默忽略
-         if (!currentEventSource) return;
+         if (currentEventSource !== es) return;
          currentEventSource.close(); currentEventSource = null;
-         if (currentSessionId.value) sessionLoading[currentSessionId.value] = false;
-         closeAllCards();
+         if (streamSid) sessionLoading[streamSid] = false;
+         if (currentSessionId.value === streamSid) closeAllCards();
          if (e && e.target && e.target.status === 404) {
-           if (currentSessionId.value) {
-             delete sessionTaskMap[currentSessionId.value];
-             localStorage.removeItem('task_map_' + currentSessionId.value);
+           if (streamSid) {
+             delete sessionTaskMap[streamSid];
+             localStorage.removeItem('task_map_' + streamSid);
            }
-           currentTaskId.value = null;
+           if (currentSessionId.value === streamSid) currentTaskId.value = null;
            timeline.push({ kind: 'error', content: '任务已结束或不存在' });
          } else {
            timeline.push({ kind: 'error', content: '连接中断' });
@@ -1025,13 +1038,14 @@ createApp({
     // ── 恢复任务 ──
     const resumeTask = async (sid, taskId, lastEventIndex = 0) => {
       if (!taskId) return;
-      if (currentEventSource) currentEventSource.close();
+      if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
        sessionLoading[sid] = true;
        activeSessions.add(sid);  // 新增这行
        currentEventSource = new EventSource(
          `/tasks/${taskId}/stream?last_index=${lastEventIndex}`
        );
        attachStreamHandlers(currentEventSource, {
+        sid,
         onFinal: () => fetchSessions(),
         onDone: () => nextTick(() => chatInput.value?.focus()),
       });
@@ -1041,7 +1055,7 @@ createApp({
      const send = async () => {
        const q = question.value.trim();
        if (!q) return;
-       if (currentEventSource) currentEventSource.close();
+       if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
        
        // 先获取或创建 session_id（若没有的话）
        const [provider, model] = parseModel(selectedModel.value);
@@ -1074,6 +1088,7 @@ createApp({
       const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid || '')}`;
       currentEventSource = new EventSource(url);
        attachStreamHandlers(currentEventSource, {
+         sid,
          onSessionId: (ev) => { currentSessionId.value = ev.session_id; if (ev.session_id) sessionLoading[ev.session_id] = true; fetchSessions(); },
          onTaskId: (ev) => {
            currentTaskId.value = ev.task_id;
@@ -1091,7 +1106,7 @@ createApp({
 
     // ── 新对话 / 重置 ──
     const newChat = () => {
-      if (currentEventSource) currentEventSource.close();
+      if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
       resetAll();
       fetchSessions();
       nextTick(() => chatInput.value?.focus());
@@ -1145,7 +1160,7 @@ createApp({
        completedCount, progressPct,
        sidebarOpen, todoOpen,
        chatBody, landingInput, chatInput,
-       send, newChat, resumeTask, onKey, truncate, renderMarkdown,
+       send, newChat, resumeTask, onKey, truncate, formatTokens, sessionTokenTitle, renderMarkdown,
        switchSession, deleteSession,
        activeSessions,
      };
