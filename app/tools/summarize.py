@@ -12,6 +12,7 @@ def format_messages_for_summary(messages: List[Dict]) -> str:
     """
     将消息列表格式化为可读文本，供 LLM 生成摘要。
 
+    - system 消息：跳过（避免摘要prompt过长）
     - user 消息：直接显示内容（截断至 600 字符）
     - assistant 消息：显示工具调用名+参数摘要，以及文本内容
     - tool 消息：显示工具返回结果摘要（截断至 300 字符）
@@ -21,7 +22,11 @@ def format_messages_for_summary(messages: List[Dict]) -> str:
         role = msg.get("role", "unknown")
         content = (msg.get("content") or "").strip()
 
-        if role == "user":
+        if role == "system":
+            # 跳过system消息，避免摘要prompt过长
+            continue
+
+        elif role == "user":
             lines.append(f"[用户] {content[:600]}")
 
         elif role == "assistant":

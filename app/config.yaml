@@ -51,5 +51,5 @@ compression:
     # 摘要生成参数
     summary:
       temperature: 0.1
-      max_tokens: 1000
-      max_chars: 800
+      max_tokens: 500  # 降低摘要生成token限制，避免不必要的长输出
+      max_chars: 600   # 相应降低字符数限制

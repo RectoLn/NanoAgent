@@ -24,14 +24,20 @@ from typing import Callable, Dict, Any, List, Optional
 _thread_local = threading.local()
 
 
-def set_thread_local_todo(todo_manager) -> None:
-    """设置当前线程的 TodoManager 实例（由 Agent.run_iter 调用）。"""
+def set_thread_local_todo(todo_manager, session=None) -> None:
+    """设置当前线程的 TodoManager 实例和 Session（由 Agent.run_iter 调用）。"""
     _thread_local.todo = todo_manager
+    _thread_local.session = session
 
 
 def get_thread_local_todo():
     """获取当前线程的 TodoManager 实例（由 _exec_todo 调用）。"""
     return getattr(_thread_local, "todo", None)
+
+
+def get_thread_local_session():
+    """获取当前线程的 Session 实例（由 _exec_get_token_usage 调用）。"""
+    return getattr(_thread_local, "session", None)
 
 
 def tool(name: str, description: str) -> Callable:
@@ -118,6 +124,20 @@ def _exec_compact() -> str:
     return compact()
 
 
+def _exec_get_token_usage() -> str:
+    """获取当前会话的 token 使用统计。"""
+    session = get_thread_local_session()
+    if session is None:
+        return "错误：Session 未初始化，无法获取 token 使用统计"
+
+    usage = session.token_usage
+    return f"""当前会话 Token 使用统计：
+- 输入 Token（Prompt）: {usage['total_prompt_tokens']}
+- 输出 Token（Completion）: {usage['total_completion_tokens']}
+- 总 Token: {usage['total_tokens']}
+"""
+
+
 # 工具名 -> kwargs 执行函数
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "bash": _exec_bash,
@@ -129,6 +149,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_system_info": _exec_get_system_info,
     "web_fetch": _exec_web_fetch,
     "install_skill": _exec_install_skill,
+    "get_token_usage": _exec_get_token_usage,
 }
 
 
@@ -328,6 +349,17 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
         "function": {
             "name": "compact",
             "description": "当你感到上下文过长影响推理时，主动调用此工具压缩上下文。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_token_usage",
+            "description": "获取当前会话的累积 Token 使用统计，包括输入 Token、输出 Token 和总 Token。",
             "parameters": {
                 "type": "object",
                 "properties": {},

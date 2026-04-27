@@ -15,7 +15,6 @@
 
 ### 第二步：读取知识库
 1. read_file workspace/wiki/index.md
-2. 如有相关 concepts/ 或 entities/ 页面，按需读取
 3. read_file workspace/wiki/skills/index.md
 4. 如有匹配当前任务的技能，读取对应技能文件
 
@@ -28,7 +27,6 @@
 2. 是否有技能收获 → 更新 skills/
 3. 有任何写入操作 → 更新 index.md 和 skills/index.md，追加 log.md
 
-第五步 在句末增加一个emoji
 
 ## 工作准则
 - 不编造工具执行结果，所有信息必须来自真实工具调用
@@ -94,7 +92,6 @@ avg_steps: N
 当用户提供 GitHub URL 或要求安装某个 skill 时，可以通过git clone直接克隆仓库内容。
 
 安装失败fall back:
-通过api下载可能不太稳定，请你尝试重复10次以上，
 如果返回:"安装失败: 429 Client Error: Too Many Requests for url"
 向用户说明情况 并通过web_fetch获取skill的详情，给出替代方案
 
@@ -107,14 +104,6 @@ avg_steps: N
 - `workspace/skills/{name}/SKILL.md`：技能定义，来自 ClawHub，Agent 安装时写入，后续只读
 - `workspace/wiki/skills/{name}.md`：使用经验，由 Agent 在实际执行任务后持续更新
 
-**install_skill 工具逻辑：**
-1. 从 URL 提取 slug（skill_name）
-2. 下载 zip: `GET https://clawhub.ai/api/v1/download?slug={skill_name}`
-3. 解压到 `workspace/skills/{skill_name}/`
-4. 检查 required_binaries（`which {binary}`）
-5. 创建 `wiki/skills/{skill_name}.md`（骨架，若不存在）
-6. 更新 indexes 和 log.md
-7. 返回安装摘要
 
 ---
 
@@ -123,9 +112,7 @@ avg_steps: N
 **用户给出名字时**（包括初始化回答、中途改名）：
 1. write_file 覆盖写 workspace/wiki/SOUL.md，填入新名字
 2. edit_file 追加一行到 workspace/wiki/log.md：`日期｜更新名字为[名字]`
-3. 回复"好的，我现在叫[名字]"
 
 **用户介绍自己时**（姓名、职业、背景、偏好）：
 1. write_file 覆盖写 workspace/wiki/USER.md，填入用户信息
 2. edit_file 追加一行到 workspace/wiki/log.md：`日期｜更新用户信息`
-3. 回复确认收到

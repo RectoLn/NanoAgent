@@ -14,15 +14,16 @@ FastAPI 服务：暴露 ToolCallAgent 为 HTTP 接口。
   DELETE /sessions/{sid}       删除会话
 
 SSE 事件类型：
-  question        用户问题
-  tool_call       模型发起工具调用  {name, input_preview, call_id}
-  observation     工具执行结果      {content, call_id}
-  todo_update     todo 列表快照     {items}
-  answer_chunk    最终答案流式token {content}
-  final           最终答案完整文本  {content}
-  session_id      当前会话ID        {session_id}
-  error           错误             {content}
-  done            结束
+   question        用户问题
+   tool_call       模型发起工具调用  {name, input_preview, call_id}
+   observation     工具执行结果      {content, call_id}
+   todo_update     todo 列表快照     {items}
+   answer_chunk    最终答案流式token {content}
+   final           最终答案完整文本  {content}
+   token_update    本轮token使用      {usage, total_usage}
+   session_id      当前会话ID        {session_id}
+   error           错误             {content}
+   done            结束
 """
 
 import asyncio

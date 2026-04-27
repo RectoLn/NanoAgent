@@ -46,10 +46,10 @@ class HelloAgentsLLM:
         tool_choice: str = "auto",
         temperature: float = 0.1,
         max_tokens: int = 4096,
-    ) -> Optional[Any]:
+    ) -> Optional[Dict[str, Any]]:
         """
         非流式调用（Tool Call 主循环使用）。
-        返回 response.choices[0]（含 finish_reason + message）。
+        返回字典：{"choice": response.choices[0], "usage": response.usage}
         """
         params: Dict[str, Any] = {
             "model": self.model,
@@ -63,7 +63,14 @@ class HelloAgentsLLM:
 
         try:
             response = self.client.chat.completions.create(**params)
-            return response.choices[0]
+            return {
+                "choice": response.choices[0],
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                    "completion_tokens": response.usage.completion_tokens if response.usage else 0,
+                    "total_tokens": response.usage.total_tokens if response.usage else 0,
+                } if response.usage else {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            }
         except Exception as e:
             print(f"❌ LLM 调用失败: {e}")
             return None

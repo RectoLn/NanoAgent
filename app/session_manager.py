@@ -35,6 +35,12 @@ class Session:
         self.tasks: List[Dict[str, Any]] = []
         # 上下文压缩历史，每条压缩操作追加一条记录
         self.compression_history: List[Dict[str, Any]] = []
+        # Token 使用统计
+        self.token_usage: Dict[str, int] = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
     def add_message(self, msg: Dict[str, Any]):
         """追加一条消息到历史。"""
@@ -61,6 +67,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "message_count": len(self.messages),
+            "token_usage": self.token_usage.copy(),
         }
 
     def history_to_dict(self) -> Dict[str, Any]:
@@ -92,6 +99,13 @@ class Session:
     def add_compression_record(self, record: Dict[str, Any]) -> None:
         """追加一条压缩记录，字段由调用方提供。"""
         self.compression_history.append(record)
+        self.updated_at = datetime.now().isoformat()
+
+    def add_token_usage(self, prompt_tokens: int, completion_tokens: int, total_tokens: int) -> None:
+        """累积 token 使用统计。"""
+        self.token_usage["total_prompt_tokens"] += prompt_tokens
+        self.token_usage["total_completion_tokens"] += completion_tokens
+        self.token_usage["total_tokens"] += total_tokens
         self.updated_at = datetime.now().isoformat()
 
     def get_compression_candidates(self, keep_recent: int = 10) -> List[Dict]:
@@ -127,6 +141,7 @@ class SessionManager:
             "messages": s.messages,
             "tasks": s.tasks,
             "compression_history": s.compression_history,
+            "token_usage": s.token_usage,
         }
         file_path = self._dir / f"{session_id}.json"
         try:
@@ -149,6 +164,11 @@ class SessionManager:
                 s.messages = d.get("messages", [])
                 s.tasks = d.get("tasks", [])
                 s.compression_history = d.get("compression_history", [])
+                s.token_usage = d.get("token_usage", {
+                    "total_prompt_tokens": 0,
+                    "total_completion_tokens": 0,
+                    "total_tokens": 0,
+                })
                 self._sessions[sid] = s
             except Exception as e:
                 print(f"加载 session {file_path.name} 失败: {e}")

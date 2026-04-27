@@ -26,6 +26,7 @@ from typing import Generator, Dict, Any, List, Optional
 
 from client import HelloAgentsLLM
 from registry import execute_tool_call, TOOLS_SCHEMA, set_thread_local_todo
+from session_manager import SESSION_MGR
 from todo_manager import TodoManager
 
 
@@ -54,6 +55,9 @@ class ToolCallAgent:
         self.max_steps = agent_cfg.get("max_steps", 30)
         self.temperature = agent_cfg.get("temperature", 0.1)
         self.max_tokens = agent_cfg.get("max_tokens", 16384)
+
+        # 最近一次精准的 prompt_tokens（来自 LLM API 返回的 usage）
+        self.last_precise_prompt_tokens: Optional[int] = None
 
         # 压缩配置（三层策略 - 仅暴露可调参数到 YAML）
         comp_cfg = self.config.get("compression", {})
@@ -180,13 +184,17 @@ class ToolCallAgent:
         ) + formatted
 
         try:
-            choice = self.llm.call(
+            response = self.llm.call(
                 messages=[{"role": "user", "content": summary_prompt}],
                 tools=None,
                 temperature=self.l2_summary_temperature,
                 max_tokens=self.l2_summary_max_tokens,
             )
-            summary = (choice.message.content or "").strip() if choice else ""
+            if response and "choice" in response:
+                choice = response["choice"]
+                summary = (choice.message.content or "").strip()
+            else:
+                summary = "（摘要生成失败）"
             if not summary:
                 summary = "（摘要生成失败）"
         except Exception as e:
@@ -264,17 +272,25 @@ class ToolCallAgent:
             if self.comp_enabled:
                 # 排除 system 消息统计
                 non_system = [m for m in messages if m.get("role") != "system"]
-                token_est = self.estimate_tokens(non_system)
                 msg_count = len(non_system)
-                if token_est > self.l2_token_threshold or msg_count > self.l2_message_threshold:
+
+                # 优先使用精准 prompt_tokens（如果可用），否则估算
+                if self.last_precise_prompt_tokens is not None:
+                    token_count = self.last_precise_prompt_tokens
+                else:
+                    token_count = self.estimate_tokens(non_system)
+
+                if token_count > self.l2_token_threshold or msg_count > self.l2_message_threshold:
                     messages = self.auto_compact(messages)
+                    # 重置精准计数（压缩后历史已变，旧值不再适用）
+                    self.last_precise_prompt_tokens = None
                     yield {"type": "compact", "content": "上下文已自动压缩"}
 
-            # ── 注入当前 Agent 的 TodoManager 到线程局部，供工具函数访问 ──
-            set_thread_local_todo(self.todo)
+            # ── 注入当前 Agent 的 TodoManager 和 Session 到线程局部，供工具函数访问 ──
+            set_thread_local_todo(self.todo, self.session)
 
             # ── 请求模型（非流式，获取 tool_calls 或 stop）──────────────
-            choice = self.llm.call(
+            response = self.llm.call(
                 messages=messages,
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
@@ -282,10 +298,33 @@ class ToolCallAgent:
                 max_tokens=self.max_tokens,
             )
 
-            if choice is None:
+            if response is None:
                 yield {"type": "error", "content": "LLM 调用失败，请检查网络或 API Key"}
                 yield {"type": "done"}
                 return
+
+            choice = response["choice"]
+            usage = response["usage"]
+
+            # 更新精准 prompt_tokens 记录（用于压缩决策）
+            self.last_precise_prompt_tokens = usage.get("prompt_tokens", 0)
+
+            # 累积 token 使用到 session
+            if self.session:
+                self.session.add_token_usage(
+                    usage["prompt_tokens"],
+                    usage["completion_tokens"],
+                    usage["total_tokens"]
+                )
+                # 保存 session 到文件
+                SESSION_MGR._save_session(self.session.session_id)
+
+                # 推送 token 更新事件到前端
+                yield {
+                    "type": "token_update",
+                    "usage": usage,
+                    "total_usage": self.session.token_usage.copy(),
+                }
 
             message = choice.message
             finish_reason = choice.finish_reason

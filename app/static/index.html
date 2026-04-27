@@ -324,6 +324,15 @@ html, body {
 .bubble-final .md-content table { border-collapse: collapse; margin: 7px 0; }
 .bubble-final .md-content th,.bubble-final .md-content td { border: 1px solid #e5e7eb; padding: 5px 9px; }
 
+/* Token 统计 */
+.token-stats {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+  font-size: 11px; color: #9ca3af;
+  display: flex; gap: 12px;
+}
+.token-stat { font-family: "SF Mono", Menlo, Consolas, monospace; }
+
 .bubble-error {
   padding: 9px 13px; border-radius: 9px; flex-shrink: 0;
   background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 13px;
@@ -477,7 +486,12 @@ html, body {
           >
             <div class="session-item-text">
               <div class="session-item-title">{{ s.title }}</div>
-              <div class="session-item-meta">{{ s.message_count }} 条消息</div>
+              <div class="session-item-meta">
+                {{ s.message_count }} 条消息
+                <span v-if="s.token_usage && s.token_usage.total_tokens > 0">
+                  · {{ s.token_usage.total_tokens.toLocaleString() }} / {{ ctxLen }} tokens
+                </span>
+              </div>
             </div>
             <button class="session-del" @click.stop="deleteSession(s.session_id)" title="删除">×</button>
           </div>
@@ -575,6 +589,10 @@ html, body {
             <div v-else-if="item.kind === 'final'" class="bubble-final">
               <span class="answer-label">✓ Answer</span>
               <div class="md-content" v-html="renderMarkdown(item.content)"></div>
+              <div v-if="item.roundUsage" class="token-stats">
+                <span class="token-stat">输入: {{ item.roundUsage.prompt_tokens.toLocaleString() }} tokens</span>
+                <span class="token-stat">输出: {{ item.roundUsage.completion_tokens.toLocaleString() }} tokens</span>
+              </div>
             </div>
             <div v-else-if="item.kind === 'error'" class="bubble-error">❌ {{ item.content }}</div>
           </template>
@@ -881,9 +899,10 @@ createApp({
     // opts.onSessionId: session_id 事件回调（send 专用）
     // opts.onTaskId:    task_id 事件回调（send 专用）
     // opts.onFinal:     final 事件后的额外回调（如 fetchSessions）
-    const attachStreamHandlers = (es, opts = {}) => {
-      let finalItem = null;
-      es.onmessage = (e) => {
+     const attachStreamHandlers = (es, opts = {}) => {
+       let finalItem = null;
+       let lastRoundUsage = null; // 存储最近一轮的 token 使用情况
+       es.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
 
@@ -901,12 +920,14 @@ createApp({
               if (opts.onTaskId) opts.onTaskId(ev);
               break;
             case 'question':
-              // 避免重复渲染：如果 timeline 最后一条已经是这个问题，跳过
-              const lastItem = timeline[timeline.length - 1];
-              if (lastItem?.kind === 'question' && lastItem?.content === ev.content) break;
-              timeline.push({ kind: 'question', content: ev.content });
-              scrollBottom();
-              break;
+               // 避免重复渲染：如果 timeline 最后一条已经是这个问题，跳过
+               const lastItem = timeline[timeline.length - 1];
+               if (lastItem?.kind === 'question' && lastItem?.content === ev.content) break;
+               timeline.push({ kind: 'question', content: ev.content });
+               // 新问题开始，清空上一轮的 token 统计
+               lastRoundUsage = null;
+               scrollBottom();
+               break;
             case 'tool_call':
               // 检查是否已经存在相同 call_id 的卡片，避免重复
               if (callCards[ev.call_id]) break;
@@ -932,22 +953,41 @@ createApp({
               finalItem.content += ev.content;
               scrollBottom();
               break;
-            case 'final':
-              if (!finalItem) timeline.push({ kind: 'final', content: ev.content });
-              else finalItem.content = ev.content;
-              finalItem = null;
-              if (opts.onFinal) opts.onFinal();
-              scrollBottom();
-              break;
+             case 'final':
+               if (!finalItem) {
+                 finalItem = reactive({ kind: 'final', content: ev.content, roundUsage: null });
+                 // 附加本轮token统计（如果有）
+                 if (lastRoundUsage) {
+                   finalItem.roundUsage = { ...lastRoundUsage };
+                 }
+                 timeline.push(finalItem);
+               } else {
+                 finalItem.content = ev.content;
+               }
+               finalItem = null;
+               if (opts.onFinal) opts.onFinal();
+               scrollBottom();
+               break;
              case 'error':
                closeAllCards();
                timeline.push({ kind: 'error', content: ev.content });
                scrollBottom();
                break;
-             case 'compact':
-               timeline.push({ kind: 'compact', content: ev.content });
-               scrollBottom();
-               break;
+              case 'compact':
+                timeline.push({ kind: 'compact', content: ev.content });
+                scrollBottom();
+                break;
+              case 'token_update':
+                // 更新当前会话的token统计
+                if (currentSessionId.value) {
+                  const session = sessions.find(s => s.session_id === currentSessionId.value);
+                  if (session) {
+                    session.token_usage = ev.total_usage;
+                  }
+                }
+                // 存储最近一轮的token使用（用于final显示）
+                lastRoundUsage = ev.usage;
+                break;
              case 'done':
               closeAllCards();
               currentEventSource.close(); currentEventSource = null;
