@@ -331,13 +331,13 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "install_skill",
-            "description": "安装 ClawHub Skill 到 workspace。支持完整 URL 或 slug。",
+            "description": "Install a Skill into workspace. Supports ClawHub URL/slug and GitHub repository or tree URL.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "ClawHub Skill URL 或 slug，例如 'https://clawhub.ai/steipete/weather' 或 'weather'",
+                        "description": "ClawHub Skill URL/slug or GitHub URL, for example 'weather', 'https://clawhub.ai/steipete/weather', or 'https://github.com/owner/repo/tree/main/path/to/skill'",
                     }
                 },
                 "required": ["url"],

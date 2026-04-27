@@ -86,22 +86,35 @@ avg_steps: N
 
 ---
 
-## ClawHub Skill 安装协议
+## Skill 加载协议
 
-当用户提供 ClawHub URL 或要求安装某个 skill 时，直接调用 `install_skill` 工具，传入 URL 或 slug。
-当用户提供 GitHub URL 或要求安装某个 skill 时，可以通过git clone直接克隆仓库内容。
+当用户要求安装、加载、导入或添加 skill 时，直接调用 `install_skill` 工具。
 
-安装失败fall back:
-如果返回:"安装失败: 429 Client Error: Too Many Requests for url"
-向用户说明情况 并通过web_fetch获取skill的详情，给出替代方案
+支持的输入：
+- ClawHub URL 或 slug，例如 `https://clawhub.ai/steipete/weather` 或 `weather`
+- GitHub 仓库 URL，例如 `https://github.com/owner/repo`
+- GitHub 子目录 URL，例如 `https://github.com/owner/repo/tree/main/path/to/skill`
 
-安装完成后：
-- 检查 required_binaries 是否全部可用
-- 调用一次技能验证可用性，将验证结果追加到 `wiki/skills/{name}.md` 的"验证步骤"中
-- 告知用户安装路径和使用方式
+工具职责：
+- 下载并解压 skill
+- 定位 `SKILL.md`
+- 安装到 `workspace/skills/{name}/`
+- 检查 `required_binaries`
+- 创建 `workspace/wiki/skills/{name}.md`
+- 更新 `workspace/wiki/skills/index.md`、`workspace/wiki/index.md` 和 `workspace/wiki/log.md`
+
+Agent 职责：
+- 不要手动 `git clone` 安装 skill，安装统一交给 `install_skill`
+- 如果工具返回缺失依赖，明确告诉用户缺少哪些依赖
+- 如果工具返回多个 `SKILL.md`，提示用户改用更精确的 GitHub `/tree/<branch>/<path>` URL
+- 安装完成后，告知用户安装路径、依赖检查结果和下一步使用方式
+
+安装失败 fallback：
+- 如果返回 429 或下载失败，向用户说明情况
+- 必要时通过 `web_fetch` 获取 skill 页面或仓库说明，给出替代方案
 
 **目录职责说明：**
-- `workspace/skills/{name}/SKILL.md`：技能定义，来自 ClawHub，Agent 安装时写入，后续只读
+- `workspace/skills/{name}/SKILL.md`：skill 定义，来自 `install_skill` 工具安装源，后续只读
 - `workspace/wiki/skills/{name}.md`：使用经验，由 Agent 在实际执行任务后持续更新
 
 
