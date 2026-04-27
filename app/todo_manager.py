@@ -3,7 +3,7 @@ TodoManager：带状态的任务列表，供 Agent 规划多步任务。
 
 - 状态：pending / in_progress / completed / cancelled
 - 约束：同一时间最多 1 个 in_progress（强制顺序聚焦）
-- 全局单例：整个 Agent 会话共享同一张 todo list
+- Per-Agent 实例：每个 Agent 持有独立的 TodoManager，避免并发竞态
 """
 
 from typing import List, Dict, Any
@@ -77,7 +77,3 @@ class TodoManager:
         in_progress = [i for i in self.items if i["status"] == "in_progress"]
         current = in_progress[0]["text"] if in_progress else "（无进行中）"
         return f"进度 {done}/{total}；当前：{current}"
-
-
-# 全局单例
-TODO = TodoManager()

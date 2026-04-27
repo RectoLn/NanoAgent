@@ -1,7 +1,6 @@
 import json
 
-from registry import tool
-from todo_manager import TODO
+from registry import tool, get_thread_local_todo
 
 
 @tool(
@@ -18,13 +17,22 @@ from todo_manager import TODO
     ),
 )
 def todo(raw_input: str = "") -> str:
+    """
+    内部实现已改为从线程局部读取 TodoManager 实例，
+    通过 registry.get_thread_local_todo() 获取当前 Agent 的 TodoManager。
+    不再依赖全局单例。
+    """
+    todo_manager = get_thread_local_todo()
+    if todo_manager is None:
+        return "错误：TodoManager 未初始化"
+    
     if not raw_input or not raw_input.strip():
         # 空参数 → 返回当前状态（只读）
-        return TODO.render()
+        return todo_manager.render()
 
     try:
         items = json.loads(raw_input)
     except json.JSONDecodeError as e:
         return f"错误：JSON 解析失败：{e}。参数应为 JSON 数组字符串。"
 
-    return TODO.update(items)
+    return todo_manager.update(items)

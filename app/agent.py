@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Generator, Dict, Any, List, Optional
 
 from client import HelloAgentsLLM
-from registry import execute_tool_call, TOOLS_SCHEMA
-from todo_manager import TODO
+from registry import execute_tool_call, TOOLS_SCHEMA, set_thread_local_todo
+from todo_manager import TodoManager
 
 
 def _load_config() -> dict:
@@ -54,6 +54,9 @@ class ToolCallAgent:
         prompts_cfg = self.config.get("prompts", {})
         prompt_file = prompts_cfg.get("system", "prompts/system.md")
         self.system_prompt = _load_prompt(prompt_file)
+
+        # 每个 Agent 持有独立的 TodoManager 实例（而非全局单例）
+        self.todo = TodoManager()
 
     def run_iter(
         self,
@@ -101,6 +104,9 @@ class ToolCallAgent:
         new_messages: List[Dict] = [{"role": "user", "content": question}]
 
         for step in range(1, self.max_steps + 1):
+            # ── 注入当前 Agent 的 TodoManager 到线程局部，供工具函数访问 ──
+            set_thread_local_todo(self.todo)
+
             # ── 请求模型（非流式，获取 tool_calls 或 stop）──────────────
             choice = self.llm.call(
                 messages=messages,
@@ -192,7 +198,7 @@ class ToolCallAgent:
 
                     # todo 工具：同步推 todo_update
                     if tool_name == "todo":
-                        yield {"type": "todo_update", "items": list(TODO.items)}
+                        yield {"type": "todo_update", "items": list(self.todo.items)}
 
                     # 把工具结果追加到 messages
                     tool_msg = {

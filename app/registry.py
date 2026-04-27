@@ -6,10 +6,32 @@ TOOLS_SCHEMA:   OpenAI-compatible API 的工具描述列表，传给 LLM。
 
 tools/ 目录下各模块仍用 @tool 装饰器注册（供 tools/__init__.py 自动发现），
 但注册结果（TOOLS 字典）不再使用，已移除。
+
+ThreadLocal 线程局部存储：
+- 每个 Agent 执行时通过 set_thread_local_todo() 注入自己的 TodoManager 实例
+- 工具函数通过 get_thread_local_todo() 读取，避免全局单例的并发竞态
 """
 
 import json
-from typing import Callable, Dict, Any, List
+import threading
+from typing import Callable, Dict, Any, List, Optional
+
+
+# ─────────────────────────────────────────────
+# Thread Local：每个 Agent 的 TodoManager 实例注入点
+# ─────────────────────────────────────────────
+
+_thread_local = threading.local()
+
+
+def set_thread_local_todo(todo_manager) -> None:
+    """设置当前线程的 TodoManager 实例（由 Agent.run_iter 调用）。"""
+    _thread_local.todo = todo_manager
+
+
+def get_thread_local_todo():
+    """获取当前线程的 TodoManager 实例（由 _exec_todo 调用）。"""
+    return getattr(_thread_local, "todo", None)
 
 
 def tool(name: str, description: str) -> Callable:
@@ -51,11 +73,19 @@ def _exec_edit(path: str = "", old_str: str = "", new_str: str = "") -> str:
 
 
 def _exec_todo(tasks: list = None) -> str:
-    from todo_manager import TODO
-
+    """
+    执行 todo 工具，读取当前线程的 TodoManager 实例。
+    
+    当 Agent 执行时，先通过 set_thread_local_todo() 注入自己的实例，
+    然后在工具调用时这里读取，实现 per-agent 的 todo 隔离。
+    """
+    todo = get_thread_local_todo()
+    if todo is None:
+        return "错误：TodoManager 未初始化，请重新启动任务"
+    
     if tasks is None:
-        return TODO.render()
-    return TODO.update(tasks)
+        return todo.render()
+    return todo.update(tasks)
 
 
 def _exec_get_current_time() -> str:

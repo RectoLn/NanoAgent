@@ -454,7 +454,7 @@ html, body {
             </svg>
           </button>
           </div>
-          <button class="new-chat-btn" @click="newChat" :disabled="loading">
+          <button class="new-chat-btn" @click="newChat">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
@@ -498,15 +498,15 @@ html, body {
           </div>
           <div class="status-pill"><span>ctx: {{ ctxLen }}</span></div>
         </div>
-        <div class="composer large">
-          <textarea v-model="question" ref="landingInput" @keydown="onKey" placeholder="Ask anything..." rows="3"></textarea>
-          <div class="bottom-row">
-            <button class="icon-btn" title="附件（暂未实现）">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-              </svg>
-            </button>
-            <button class="send-btn" @click="send" :disabled="!question.trim() || loading">
+         <div class="composer large">
+           <textarea v-model="question" ref="landingInput" @keydown="onKey" placeholder="Ask anything..." rows="3"></textarea>
+           <div class="bottom-row">
+             <button class="icon-btn" title="附件（暂未实现）">
+               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+               </svg>
+             </button>
+             <button class="send-btn" @click="send" :disabled="!question.trim() || sessionLoading[null]">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
               </svg>
@@ -530,7 +530,7 @@ html, body {
                 <option value="deepseek:deepseek-reasoner">DeepSeek R1</option>
               </select>
             </div>
-            <button class="header-btn" @click="newChat" :disabled="loading">新对话</button>
+            <button class="header-btn" @click="newChat">新对话</button>
           </div>
         </div>
 
@@ -572,8 +572,8 @@ html, body {
 
         <div class="composer">
           <textarea v-model="question" ref="chatInput" @keydown="onKey"
-            :disabled="loading"
-            :placeholder="loading ? 'Thinking...' : 'Ask anything...'"
+            :disabled="sessionLoading[currentSessionId]"
+            :placeholder="sessionLoading[currentSessionId] ? 'Thinking...' : 'Ask anything...'"
             rows="2"
           ></textarea>
           <div class="bottom-row">
@@ -581,9 +581,9 @@ html, body {
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
-            </button>
-            <button class="send-btn" @click="send" :disabled="!question.trim() || loading">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+             </button>
+             <button class="send-btn" @click="send" :disabled="!question.trim() || sessionLoading[currentSessionId]">
+               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
               </svg>
             </button>
@@ -592,8 +592,8 @@ html, body {
       </div>
     </div>
 
-    <!-- ══ 右栏：任务面板（有任务时显示，支持折叠）══ -->
-    <div class="todo-col" v-show="todos.length > 0 || loading" :class="{ collapsed: !todoOpen }">
+     <!-- ══ 右栏：任务面板（有任务时显示，支持折叠）══ -->
+     <div class="todo-col" v-show="todos.length > 0 || Object.values(sessionLoading).some(v => v)" :class="{ collapsed: !todoOpen }">
 
       <!-- 折叠时显示的细栏 -->
       <div v-show="!todoOpen" class="todo-strip">
@@ -655,11 +655,11 @@ const { createApp, ref, computed, nextTick, onMounted, reactive, watch } = Vue;
 
 createApp({
   setup() {
-    const question      = ref('');
-    const timeline      = reactive([]);
-    const todos         = reactive([]);
-    const loading       = ref(false);
-    const sessions      = reactive([]);
+     const question      = ref('');
+     const timeline      = reactive([]);
+     const todos         = reactive([]);
+     const sessionLoading = reactive({});  // session_id -> boolean，隔离每个 session 的 loading 状态
+     const sessions      = reactive([]);
     const currentSessionId    = ref(null);
     const currentSessionTitle = ref('');
     // currentTaskId: 当前会话关联任务的快捷引用（与 sessionTaskMap[currentSessionId] 保持同步）
@@ -889,77 +889,80 @@ createApp({
             case 'done':
               closeAllCards();
               currentEventSource.close(); currentEventSource = null;
-              loading.value = false;
+              if (currentSessionId.value) sessionLoading[currentSessionId.value] = false;
               finalItem = null;
               if (opts.onDone) opts.onDone();
               break;
           }
         } catch (err) { console.error(err); }
       };
-      es.onerror = (e) => {
-        // 若 currentEventSource 已被 done 处理清空，说明正常结束后浏览器触发的多余 onerror，静默忽略
-        if (!currentEventSource) return;
-        currentEventSource.close(); currentEventSource = null;
-        loading.value = false;
-        closeAllCards();
-        if (e && e.target && e.target.status === 404) {
-          if (currentSessionId.value) {
-            delete sessionTaskMap[currentSessionId.value];
-            localStorage.removeItem('task_map_' + currentSessionId.value);
-          }
-          currentTaskId.value = null;
-          timeline.push({ kind: 'error', content: '任务已结束或不存在' });
-        } else {
-          timeline.push({ kind: 'error', content: '连接中断' });
-        }
-      };
+       es.onerror = (e) => {
+         // 若 currentEventSource 已被 done 处理清空，说明正常结束后浏览器触发的多余 onerror，静默忽略
+         if (!currentEventSource) return;
+         currentEventSource.close(); currentEventSource = null;
+         if (currentSessionId.value) sessionLoading[currentSessionId.value] = false;
+         closeAllCards();
+         if (e && e.target && e.target.status === 404) {
+           if (currentSessionId.value) {
+             delete sessionTaskMap[currentSessionId.value];
+             localStorage.removeItem('task_map_' + currentSessionId.value);
+           }
+           currentTaskId.value = null;
+           timeline.push({ kind: 'error', content: '任务已结束或不存在' });
+         } else {
+           timeline.push({ kind: 'error', content: '连接中断' });
+         }
+       };
     };
 
-    // ── 恢复任务 ──
-    const resumeTask = async (taskId) => {
-      if (!taskId) return;
-      if (currentEventSource) currentEventSource.close();
-      loading.value = true;
-      currentEventSource = new EventSource(`/tasks/${taskId}/stream?last_index=0`);
-      attachStreamHandlers(currentEventSource);
-    };
+     // ── 恢复任务 ──
+     const resumeTask = async (taskId) => {
+       if (!taskId) return;
+       if (currentEventSource) currentEventSource.close();
+       if (currentSessionId.value) sessionLoading[currentSessionId.value] = true;
+       currentEventSource = new EventSource(`/tasks/${taskId}/stream?last_index=0`);
+       attachStreamHandlers(currentEventSource);
+     };
 
     // ── 发送 ──
-    const send = async () => {
-      const q = question.value.trim();
-      if (!q) return;
-      if (currentEventSource) currentEventSource.close();
-      loading.value = true;
-      question.value = '';
-      Object.keys(callCards).forEach(k => delete callCards[k]);
-      turnCount++;
-      if (turnCount > 1) timeline.push({ kind: 'divider', turn: turnCount });
+     const send = async () => {
+       const q = question.value.trim();
+       if (!q) return;
+       if (currentEventSource) currentEventSource.close();
+       
+       // 先获取或创建 session_id（若没有的话）
+       const [provider, model] = parseModel(selectedModel.value);
+       let sid = currentSessionId.value;
+       
+       // 如果没有会话，先创建新会话
+       if (!sid) {
+         try {
+           const r = await fetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, model_id: model }) });
+           if (r.ok) {
+             const d = await r.json();
+             sid = d.session_id;
+             currentSessionId.value = sid;
+             currentSessionTitle.value = d.title || '新对话';
+             fetchSessions();
+             localStorage.setItem('currentSessionId', sid);
+           }
+         } catch (e) {
+           console.error('创建会话失败:', e);
+         }
+       }
 
-      const [provider, model] = parseModel(selectedModel.value);
-      let sid = currentSessionId.value;
-
-      // 如果没有会话，先创建新会话
-      if (!sid) {
-        try {
-          const r = await fetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, model_id: model }) });
-          if (r.ok) {
-            const d = await r.json();
-            sid = d.session_id;
-            currentSessionId.value = sid;
-            currentSessionTitle.value = d.title || '新对话';
-            fetchSessions();
-            localStorage.setItem('currentSessionId', sid);
-          }
-        } catch (e) {
-          console.error('创建会话失败:', e);
-        }
-      }
+       // 准备好 session_id 后，设置该 session 的 loading 状态
+       if (sid) sessionLoading[sid] = true;
+       question.value = '';
+       Object.keys(callCards).forEach(k => delete callCards[k]);
+       turnCount++;
+       if (turnCount > 1) timeline.push({ kind: 'divider', turn: turnCount });
 
       const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid || '')}`;
       currentEventSource = new EventSource(url);
-      attachStreamHandlers(currentEventSource, {
-        onSessionId: (ev) => { currentSessionId.value = ev.session_id; fetchSessions(); },
-        onTaskId: (ev) => {
+       attachStreamHandlers(currentEventSource, {
+         onSessionId: (ev) => { currentSessionId.value = ev.session_id; if (ev.session_id) sessionLoading[ev.session_id] = true; fetchSessions(); },
+         onTaskId: (ev) => {
           currentTaskId.value = ev.task_id;
           if (currentSessionId.value) {
             // sessionTaskMap 与 currentTaskId 保持同步（双份状态：前者跨会话持久化，后者是当前快捷引用）
@@ -1013,16 +1016,16 @@ createApp({
       nextTick(() => landingInput.value?.focus());
     });
 
-    return {
-      question, timeline, todos, loading, started,
-      sessions, currentSessionId, currentSessionTitle, currentTaskId,
-      selectedModel, ctxLen,
-      completedCount, progressPct,
-      sidebarOpen, todoOpen,
-      chatBody, landingInput, chatInput,
-      send, newChat, resumeTask, onKey, truncate, renderMarkdown,
-      switchSession, deleteSession,
-    };
+     return {
+       question, timeline, todos, sessionLoading, started,
+       sessions, currentSessionId, currentSessionTitle, currentTaskId,
+       selectedModel, ctxLen,
+       completedCount, progressPct,
+       sidebarOpen, todoOpen,
+       chatBody, landingInput, chatInput,
+       send, newChat, resumeTask, onKey, truncate, renderMarkdown,
+       switchSession, deleteSession,
+     };
   }
 }).mount('#app');
 </script>
