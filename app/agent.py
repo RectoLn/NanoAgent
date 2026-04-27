@@ -13,10 +13,12 @@ ToolCallAgent：基于 OpenAI Tool Call 协议的 Agent 主循环。
   todo_update      todo 列表快照
   answer_chunk     最终答案流式 token
   final            最终答案完整文本
+  compact          上下文压缩事件（Layer 2/3 触发）
   error            错误
   done             结束
 """
 
+import json
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -42,14 +44,52 @@ def _load_prompt(file_path: str) -> str:
 class ToolCallAgent:
     """Tool Call 模式 Agent"""
 
-    def __init__(self, llm: HelloAgentsLLM):
+    def __init__(self, llm: HelloAgentsLLM, session_id: Optional[str] = None, session = None):
         self.llm = llm
         self.config = _load_config()
+        self.session_id = session_id
+        self.session = session  # Session 对象引用，用于 compression_history
 
         agent_cfg = self.config.get("agent", {})
         self.max_steps = agent_cfg.get("max_steps", 30)
         self.temperature = agent_cfg.get("temperature", 0.1)
         self.max_tokens = agent_cfg.get("max_tokens", 16384)
+
+        # 压缩配置（三层策略 - 仅暴露可调参数到 YAML）
+        comp_cfg = self.config.get("compression", {})
+        self.comp_enabled = comp_cfg.get("enabled", True)
+
+        # Layer 1: micro_compact
+        l1_cfg = comp_cfg.get("layer1", {})
+        self.l1_keep_recent = l1_cfg.get("keep_recent_tool_messages", 3)
+        self.l1_content_threshold = l1_cfg.get("content_threshold", 100)
+        # 占位符硬编码（无需配置）
+        self.l1_placeholder_template = "[Previous: {tool_call_id} result truncated]"
+
+        # Layer 2: auto_compact
+        l2_cfg = comp_cfg.get("layer2", {})
+        self.l2_token_threshold = l2_cfg.get("token_threshold", 40000)
+        self.l2_message_threshold = l2_cfg.get("message_threshold", 30)
+        l2_summary = l2_cfg.get("summary", {})
+        self.l2_summary_temperature = l2_summary.get("temperature", 0.1)
+        self.l2_summary_max_tokens = l2_summary.get("max_tokens", 1000)
+        self.l2_summary_max_chars = l2_summary.get("max_chars", 800)
+        # Prompt 硬编码（无需配置）
+        self.l2_prompt_template = (
+            "请将以下对话历史压缩成一份简洁摘要，保留所有关键决策、"
+            "已完成的操作、重要结论和当前进度，删除冗余推理过程。"
+            "以 Markdown 列表格式输出，最多 800 字。\n\n"
+            "{messages}"
+        )
+        # 总是保存 transcript（无需配置）
+        self.l2_save_transcript = True
+
+        # Layer 3: compact 工具（描述硬编码）
+        self.l3_tool_description = "当你感到上下文过长影响推理时，主动调用此工具压缩上下文。"
+
+        # 摘要消息格式（硬编码）
+        self.summary_role = "user"
+        self.summary_prefix = "[上下文摘要]\n\n"
 
         prompts_cfg = self.config.get("prompts", {})
         prompt_file = prompts_cfg.get("system", "prompts/system.md")
@@ -57,6 +97,124 @@ class ToolCallAgent:
 
         # 每个 Agent 持有独立的 TodoManager 实例（而非全局单例）
         self.todo = TodoManager()
+
+    # ── 上下文压缩：三层策略 ──────────────────────────────────────────────────
+
+    def estimate_tokens(self, messages: List[Dict]) -> int:
+        """
+        估算消息列表的 token 数（词数 × 1.3 系数）。
+        仅统计 content 字段，忽略 tool_calls 等非文本字段。
+        """
+        total = 0
+        for msg in messages:
+            content = msg.get("content", "") or ""
+            total += len(content.split()) * 1.3
+        return int(total)
+
+    def micro_compact(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Layer 1：micro_compact - 每次 LLM 调用前静默执行。
+        - 找出所有 role=="tool" 的消息
+        - 保留最近 N 条 tool 消息不动（config: layer1.keep_recent_tool_messages）
+        - 旧 tool 消息中，content 长度超过阈值的截断（config: layer1.content_threshold）
+        返回新列表（不修改原列表）。
+        """
+        if not self.comp_enabled:
+            return messages
+
+        # 提取所有 tool 消息（索引, msg）
+        tool_entries = [(i, m) for i, m in enumerate(messages) if m.get("role") == "tool"]
+        if len(tool_entries) <= self.l1_keep_recent:
+            return messages
+
+        # 需要保留的索引集合（最近 N 条）
+        keep_indices = {idx for idx, _ in tool_entries[-self.l1_keep_recent:]}
+        new_messages = list(messages)  # 复制
+
+        # 处理旧 tool 消息
+        for idx, msg in tool_entries[:-self.l1_keep_recent]:
+            content = (msg.get("content") or "").strip()
+            if len(content) > self.l1_content_threshold:
+                 tc_id = msg.get("tool_call_id", "unknown")
+                 new_messages[idx] = {
+                     "role": "tool",
+                     "tool_call_id": tc_id,
+                     "content": self.l1_placeholder_template.format(tool_call_id=tc_id),
+                 }
+        return new_messages
+
+    def auto_compact(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Layer 2 / Layer 3：自动压缩上下文。
+        - 保存完整 messages 到 transcripts/（若配置开启）
+        - 调用 LLM 生成摘要（使用 layer2.summary 配置）
+        - 替换 messages 为单条摘要消息
+        返回 new_messages。
+        """
+        if not self.comp_enabled:
+            return messages
+
+        # 1. 保存 transcript（可选）
+        if self.l2_save_transcript and self.session_id:
+            transcripts_dir = Path(__file__).parent.parent / "workspace" / "transcripts"
+            transcripts_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = transcripts_dir / f"{self.session_id}_{timestamp}.jsonl"
+
+            try:
+                with open(filename, "w", encoding="utf-8") as f:
+                    for msg in messages:
+                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            except Exception as e:
+                print(f"[Compression] 保存 transcript 失败: {e}")
+
+        # 2. 生成摘要
+        from tools.summarize import format_messages_for_summary
+
+        formatted = format_messages_for_summary(messages)
+        summary_prompt = (
+            self.l2_prompt_template or
+            "请将以下对话历史压缩成一份简洁摘要，保留所有关键决策、"
+            "已完成的操作、重要结论和当前进度，删除冗余推理过程。"
+            "以 Markdown 列表格式输出，最多 800 字。\n\n"
+        ) + formatted
+
+        try:
+            choice = self.llm.call(
+                messages=[{"role": "user", "content": summary_prompt}],
+                tools=None,
+                temperature=self.l2_summary_temperature,
+                max_tokens=self.l2_summary_max_tokens,
+            )
+            summary = (choice.message.content or "").strip() if choice else ""
+            if not summary:
+                summary = "（摘要生成失败）"
+        except Exception as e:
+            print(f"[Compression] 摘要生成异常: {e}")
+            summary = "（摘要生成失败）"
+
+        # 截断摘要长度
+        if self.l2_summary_max_chars > 0 and len(summary) > self.l2_summary_max_chars:
+            summary = summary[:self.l2_summary_max_chars] + "…"
+
+        # 3. 替换 messages
+        summary_content = f"{self.summary_prefix}{summary}"
+        new_messages = [{"role": self.summary_role, "content": summary_content}]
+
+        # 4. 记录 compression_history
+        if self.session:
+            token_saved = sum(len((m.get("content") or "").split()) for m in messages)
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "transcript": str(filename) if self.l2_save_transcript and self.session_id else "",
+                "original_count": len(messages),
+                "compressed_count": len(new_messages),
+                "token_saved": token_saved,
+                "summary": summary,
+            }
+            self.session.add_compression_record(record)
+
+        return new_messages
 
     def run_iter(
         self,
@@ -88,11 +246,6 @@ class ToolCallAgent:
         # 否则构建新对话
         if history is not None:
             messages: List[Dict] = list(history)
-            # 压缩检查：在追加新用户消息之前，对已有历史执行压缩
-            if self._should_compress_context(messages):
-                messages, _log = self._compress_context(messages)
-                if _log:
-                    yield {"type": "compression_log", **_log}
             messages.append({"role": "user", "content": question})
         else:
             messages = [
@@ -104,6 +257,19 @@ class ToolCallAgent:
         new_messages: List[Dict] = [{"role": "user", "content": question}]
 
         for step in range(1, self.max_steps + 1):
+            # ── Layer 1：micro_compact 每次 LLM 调用前静默执行 ─────────────
+            messages = self.micro_compact(messages)
+
+            # ── Layer 2：token 或消息数超阈值时自动触发 auto_compact ─────────
+            if self.comp_enabled:
+                # 排除 system 消息统计
+                non_system = [m for m in messages if m.get("role") != "system"]
+                token_est = self.estimate_tokens(non_system)
+                msg_count = len(non_system)
+                if token_est > self.l2_token_threshold or msg_count > self.l2_message_threshold:
+                    messages = self.auto_compact(messages)
+                    yield {"type": "compact", "content": "上下文已自动压缩"}
+
             # ── 注入当前 Agent 的 TodoManager 到线程局部，供工具函数访问 ──
             set_thread_local_todo(self.todo)
 
@@ -188,6 +354,14 @@ class ToolCallAgent:
                         "input_preview": preview,
                         "call_id": call_id,
                     }
+
+                    # Layer 3：检测 compact 工具调用
+                    if tool_name == "compact":
+                        # 执行 auto_compact（与 Layer 2 完全相同的流程）
+                        messages = self.auto_compact(messages)
+                        yield {"type": "compact", "content": "上下文已手动压缩"}
+                        # compact 工具不产生 tool_msg，直接进入下一轮
+                        continue
 
                     # 执行工具
                     result = execute_tool_call(tool_name, args_json)
@@ -274,102 +448,4 @@ class ToolCallAgent:
                     final_text = f"（{event['content']}）"
         return final_text
 
-    # ── 上下文压缩 ────────────────────────────────────────────────────────
-
-    def _should_compress_context(self, history: List[Dict]) -> bool:
-        """
-        判断是否需要压缩，基于 config.yaml 中的 context 配置。
-        仅统计非 system 消息的 token 估算值。
-        """
-        ctx_cfg = self.config.get("context", {})
-        if not ctx_cfg.get("compression_enabled", True):
-            return False
-
-        token_threshold = ctx_cfg.get("compress_threshold_tokens", 25000)
-        message_threshold = ctx_cfg.get("compress_threshold_messages", 50)
-
-        non_system = [m for m in history if m.get("role") != "system"]
-        token_estimate = sum(len((m.get("content") or "").split()) for m in non_system)
-        return len(non_system) > message_threshold or token_estimate > token_threshold
-
-    def _compress_context(self, history: List[Dict]):
-        """
-        压缩历史消息：保留 system prompt + 摘要消息 + 最近 N 条。
-
-        返回 (new_history, log_data)。
-        压缩失败时静默降级，返回 (原始 history, None)。
-        """
-        ctx_cfg = self.config.get("context", {})
-        keep_recent = ctx_cfg.get("keep_recent_messages", 10)
-
-        # system 消息单独提取
-        system_msg = (
-            history[0] if history and history[0].get("role") == "system" else None
-        )
-        rest = history[1:] if system_msg else history[:]
-
-        if len(rest) <= keep_recent:
-            return history, None  # 不足以压缩
-
-        recent_msgs = rest[-keep_recent:]
-        to_compress = rest[:-keep_recent]
-
-        try:
-            summary = self._summarize_messages(to_compress)
-        except Exception as e:
-            print(f"[Compression] 摘要生成异常，跳过压缩: {e}")
-            return history, None
-
-        token_saved = sum(len((m.get("content") or "").split()) for m in to_compress)
-
-        summary_msg = {
-            "role": "assistant",
-            "content": f"[上下文摘要]\n{summary}",
-        }
-
-        new_history: List[Dict] = []
-        if system_msg:
-            new_history.append(system_msg)
-        new_history.append(summary_msg)
-        new_history.extend(recent_msgs)
-
-        print(
-            f"[Compression] {len(to_compress)} 条消息 → 摘要，"
-            f"history {len(history)} → {len(new_history)}，"
-            f"节省约 {token_saved} 词"
-        )
-
-        log_data = {
-            "timestamp": datetime.now().isoformat(),
-            "original_count": len(history),
-            "compressed_count": len(new_history),
-            "compressed_msg_count": len(to_compress),
-            "token_saved": token_saved,
-            "summary": summary,
-        }
-        return new_history, log_data
-
-    def _summarize_messages(self, messages: List[Dict]) -> str:
-        """调用 LLM 将消息段压缩为 Markdown 摘要（直接调用，不走 Tool Call 循环）。"""
-        from tools.summarize import format_messages_for_summary
-
-        formatted = format_messages_for_summary(messages)
-        summary_prompt = (
-            "请将以下对话历史压缩成一份简洁的摘要，保留关键决策、已获取的信息和重要结论：\n\n"
-            f"{formatted}\n\n"
-            "摘要要求：\n"
-            "- 保留所有重要的数据和决策\n"
-            "- 删除重复和冗长的推理过程\n"
-            "- 以 Markdown 列表格式呈现\n"
-            "- 最多 500 字"
-        )
-
-        choice = self.llm.call(
-            messages=[{"role": "user", "content": summary_prompt}],
-            tools=None,
-            temperature=0.1,
-        )
-
-        if choice and choice.message and choice.message.content:
-            return choice.message.content.strip()
-        return "（摘要生成失败）"
+    # ── 上下文压缩（三层策略已内联到 run_iter）──────────────────────────────

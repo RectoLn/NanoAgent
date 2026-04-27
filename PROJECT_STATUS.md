@@ -253,6 +253,32 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+### v0.8 (2026-04-27)
+
+**上下文压缩升级 · 三层策略架构**
+
+**新增三层压缩架构**：
+- **Layer 1 - 消息截断**：保留最近 3 条 tool 结果不截断，旧 tool 消息 content 超过 100 字符自动截断到 100 字符，减少冗长输出
+- **Layer 2 - 摘要压缩**：当 token 估算超过 阈值 时，触发 LLM 摘要生成，保留最近 10 条消息不压缩
+- **Layer 3 - 兜底处理**：token 溢出时直接输出现有内容，避免 context 无限堆积
+
+**配置重构**：
+- `config.yaml` 从简单的 `context.*` 改为结构化的 `compression.*` 配置
+- 新增 `layer1`, `layer2` 子配置，支持精细调优
+- 移除旧的 `keep_recent_messages`（现在在 layer2 中）
+- 新增 `content_threshold` 控制 tool 消息截断长度
+
+**参数意义详解**：
+- `agent.max_tokens: 16384` - 单次 LLM 调用的最大输出 token（16K 适合长任务）
+- `compression.enabled: true` - 全局压缩开关（false 用于调试原始对话）
+- `layer1.keep_recent_tool_messages: 3` - 保留最近 3 条 tool 结果的完整 content
+- `layer1.content_threshold: 100` - tool 消息 content 超过 100 字符截断（避免 bash 输出过长）
+- `layer2.token_threshold: 3000` - 触发压缩的词数阈值（估算 token = 词数 × 1.3）
+- `layer2.message_threshold: 30` - 触发压缩的消息数阈值
+- `layer2.summary.temperature: 0.1` - 摘要生成的一致性参数
+- `layer2.summary.max_tokens: 1000` - 摘要的最大长度
+- `layer2.summary.max_chars: 800` - 摘要的字符数上限
+
 ### v0.7 (2026-04-25)
 
 **上下文压缩机制 · 从文件存储改为 Session JSON 内置 + Token 溢出修复**

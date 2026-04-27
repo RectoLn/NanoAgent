@@ -91,6 +91,7 @@ avg_steps: N
 ## ClawHub Skill 安装协议
 
 当用户提供 ClawHub URL 或要求安装某个 skill 时，直接调用 `install_skill` 工具，传入 URL 或 slug。
+当用户提供 GitHub URL 或要求安装某个 skill 时，可以通过git clone直接克隆仓库内容。
 
 安装失败fall back:
 通过api下载可能不太稳定，请你尝试重复10次以上，

@@ -169,12 +169,14 @@ def _get_llm_config(provider: str, model_id: str = "") -> dict:
     return {"api_key": api_key, "base_url": base_url, "model": model}
 
 
-def _new_agent(provider: str = "kilo", model_id: str = "") -> ToolCallAgent:
+def _new_agent(provider: str = "kilo", model_id: str = "", session: Optional[Session] = None) -> ToolCallAgent:
     """每次请求新建 Agent 实例。"""
     config = _get_llm_config(provider, model_id)
     llm = HelloAgentsLLM(**config)
-    agent = ToolCallAgent(llm=llm)
-    agent.system_prompt = load_system_prompt()
+    session_id = session.session_id if session else None
+    agent = ToolCallAgent(llm=llm, session_id=session_id, session=session)
+    # system_prompt 优先使用 session 中已存储的（会话持久化），否则重新加载
+    agent.system_prompt = session.system_prompt if session and session.system_prompt else load_system_prompt()
     return agent
 
 
@@ -311,12 +313,11 @@ def chat(req: ChatRequest):
     if not req.question or not req.question.strip():
         return JSONResponse({"error": "question 不能为空"}, status_code=400)
 
-    agent = _new_agent(req.provider, req.model_id)
-
     # 会话：获取或新建
     session = SESSION_MGR.get_or_create(
-        req.session_id, system_prompt=agent.system_prompt
+        req.session_id, system_prompt=load_system_prompt()
     )
+    agent = _new_agent(req.provider, req.model_id, session=session)
     history = session.get_messages_for_llm()
 
     try:
@@ -360,11 +361,11 @@ def chat_stream(
     if not question or not question.strip():
         return JSONResponse({"error": "question 不能为空"}, status_code=400)
 
-    agent = _new_agent(provider, model_id)
-
-    # 会话：获取或新建
+    # 会话：获取或新建（system_prompt 先加载，get_or_create 会使用）
     sid = session_id.strip() or None
-    session = SESSION_MGR.get_or_create(sid, system_prompt=agent.system_prompt)
+    system_prompt = load_system_prompt()
+    session = SESSION_MGR.get_or_create(sid, system_prompt=system_prompt)
+    agent = _new_agent(provider, model_id, session=session)
     history = session.get_messages_for_llm()
 
     # 启动任务
@@ -441,9 +442,10 @@ async def run_and_reply(chat_id: int, session_id: str, text: str) -> None:
     # 1. 发送"正在输入"状态指示（不发文本）
     await send_chat_action(chat_id, "typing")
 
-    # 2. 获取/创建 session，构造 agent
-    agent = _new_agent()
-    session = _get_tg_session(session_id, system_prompt=agent.system_prompt)
+    # 2. 获取/创建 session，构造 agent（传入 session）
+    system_prompt = load_system_prompt()
+    session = _get_tg_session(session_id, system_prompt=system_prompt)
+    agent = _new_agent(session=session)
     history = session.get_messages_for_llm()
 
     # 3. 启动后台任务（在独立线程运行 agent）

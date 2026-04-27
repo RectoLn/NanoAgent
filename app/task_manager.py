@@ -64,11 +64,7 @@ class TaskManager:
                         SESSION_MGR._save_session(session_id)
                     elif event["type"] == "todo_update" and session:
                         session.tasks = event["items"]
-                    elif event["type"] == "compression_log" and session:
-                        session.add_compression_record(
-                            {k: v for k, v in event.items() if k != "type"}
-                        )
-                        SESSION_MGR._save_session(session_id)
+
 
                     with task_state.lock:
                         task_state.events.append(event)

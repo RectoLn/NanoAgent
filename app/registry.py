@@ -112,6 +112,12 @@ def _exec_install_skill(url: str = "") -> str:
     return install_skill(url)
 
 
+def _exec_compact() -> str:
+    from tools.compact import compact
+
+    return compact()
+
+
 # 工具名 -> kwargs 执行函数
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "bash": _exec_bash,
@@ -314,6 +320,17 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compact",
+            "description": "当你感到上下文过长影响推理时，主动调用此工具压缩上下文。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
             },
         },
     },

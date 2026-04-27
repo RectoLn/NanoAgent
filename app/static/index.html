@@ -329,6 +329,13 @@ html, body {
   background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 13px;
 }
 
+/* ─── 压缩提示 ───────────────────────────── */
+.bubble-compact {
+  align-self: center; padding: 6px 12px; border-radius: 999px;
+  background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+  font-size: 12px; flex-shrink: 0;
+}
+
 /* ─── 右栏：任务面板 ────────────────────── */
 .todo-col {
   width: 220px;
@@ -535,12 +542,15 @@ html, body {
         </div>
 
         <div class="chat-body" ref="chatBody">
-          <template v-for="(item, i) in timeline" :key="i">
-            <div v-if="item.kind === 'divider'" class="turn-divider">
-              <span>第 {{ item.turn }} 轮</span>
-            </div>
-            <div v-else-if="item.kind === 'question'" class="bubble-question">{{ item.content }}</div>
-            <div v-else-if="item.kind === 'step'" :class="['step-card', { running: item.running, expanded: item.expanded }]">
+           <template v-for="(item, i) in timeline" :key="i">
+             <div v-if="item.kind === 'divider'" class="turn-divider">
+               <span>第 {{ item.turn }} 轮</span>
+             </div>
+             <div v-else-if="item.kind === 'compact'" class="bubble-compact">
+               📦 {{ item.content }}
+             </div>
+             <div v-else-if="item.kind === 'question'" class="bubble-question">{{ item.content }}</div>
+             <div v-else-if="item.kind === 'step'" :class="['step-card', { running: item.running, expanded: item.expanded }]">
               <div class="step-header" @click="item.expanded = !item.expanded">
                 <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1 L7 5 L3 9 Z"/></svg>
                 <span class="step-num">#{{ item.step }}</span>
@@ -655,6 +665,7 @@ const { createApp, ref, computed, nextTick, onMounted, reactive, watch } = Vue;
 
 createApp({
   setup() {
+     const activeSessions = new Set()  // 本次页面加载后实际连接过 SSE 的 session
      const question      = ref('');
      const timeline      = reactive([]);
      const todos         = reactive([]);
@@ -671,7 +682,7 @@ createApp({
     let turnCount = 0;
     let currentEventSource = null;
 
-    // session_id -> task_id 映射
+    // session_id -> { taskId, lastEventIndex } 映射
     const sessionTaskMap = reactive({});
 
     // 面板折叠状态
@@ -772,15 +783,50 @@ createApp({
         const msgs = data.messages || [];
         const lastMsg = msgs[msgs.length - 1];
         const taskDone = lastMsg?.role === 'assistant' && lastMsg?.content;
-        const taskId = sessionTaskMap[sid];
-        if (taskId && !taskDone) {
-          currentTaskId.value = taskId;
-          resumeTask(taskId);
-        } else if (taskId && taskDone) {
+        const taskInfo = sessionTaskMap[sid] ||
+          (localStorage.getItem('task_map_' + sid) ?
+            (() => {
+              try {
+                return JSON.parse(localStorage.getItem('task_map_' + sid));
+              } catch {
+                return { taskId: localStorage.getItem('task_map_' + sid), lastEventIndex: 0 };
+              }
+            })() : null);
+        if (taskInfo && !taskDone) {
+          currentTaskId.value = taskInfo.taskId;
+
+          // 判断是否是刷新场景：
+          // activeSessions 里没有说明本次页面加载后从未连接过该 session 的 SSE
+          // 即刷新场景，需要从头回放
+          const isRefresh = !activeSessions.has(sid) && taskInfo.lastEventIndex > 0;
+
+          if (isRefresh) {
+            // 刷新场景：清空 timeline，从 0 回放所有事件（包含进行中的部分）
+            timeline.splice(0, timeline.length);
+            turnCount = 0;
+            Object.keys(callCards).forEach(k => delete callCards[k]);
+            stepCounter = 0;
+            resumeTask(sid, taskInfo.taskId, 0);
+            sessionTaskMap[sid] = { taskId: taskInfo.taskId, lastEventIndex: 0 };
+          } else {
+            // 切换会话场景：清空 timeline，从 0 回放完整的历史和正在进行的任务
+            timeline.splice(0, timeline.length);
+            turnCount = 0;
+            Object.keys(callCards).forEach(k => delete callCards[k]);
+            stepCounter = 0;
+            resumeTask(sid, taskInfo.taskId, 0);
+            sessionTaskMap[sid] = { taskId: taskInfo.taskId, lastEventIndex: 0 };
+          }
+
+          localStorage.setItem('task_map_' + sid, JSON.stringify(sessionTaskMap[sid]));
+        } else if (taskInfo && taskDone) {
           // 清理过期的任务映射，防止下次再触发
           delete sessionTaskMap[sid];
           localStorage.removeItem('task_map_' + sid);
           currentTaskId.value = null;
+        } else {
+          // 没有任务，设置 loading 为 false
+          sessionLoading[sid] = false;
         }
         nextTick(() => { if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight; chatInput.value?.focus(); });
       } catch (e) { console.error(e); }
@@ -840,6 +886,13 @@ createApp({
       es.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
+
+          // 更新 lastEventIndex（对于非 new_messages 事件）
+          if (currentSessionId.value && sessionTaskMap[currentSessionId.value] && ev.type !== 'new_messages') {
+            sessionTaskMap[currentSessionId.value].lastEventIndex++;
+            localStorage.setItem('task_map_' + currentSessionId.value, JSON.stringify(sessionTaskMap[currentSessionId.value]));
+          }
+
           switch (ev.type) {
             case 'session_id':
               if (opts.onSessionId) opts.onSessionId(ev);
@@ -848,10 +901,15 @@ createApp({
               if (opts.onTaskId) opts.onTaskId(ev);
               break;
             case 'question':
+              // 避免重复渲染：如果 timeline 最后一条已经是这个问题，跳过
+              const lastItem = timeline[timeline.length - 1];
+              if (lastItem?.kind === 'question' && lastItem?.content === ev.content) break;
               timeline.push({ kind: 'question', content: ev.content });
               scrollBottom();
               break;
             case 'tool_call':
+              // 检查是否已经存在相同 call_id 的卡片，避免重复
+              if (callCards[ev.call_id]) break;
               newCard(ev.call_id, ev.name, ev.input_preview);
               break;
             case 'observation': {
@@ -881,17 +939,26 @@ createApp({
               if (opts.onFinal) opts.onFinal();
               scrollBottom();
               break;
-            case 'error':
-              closeAllCards();
-              timeline.push({ kind: 'error', content: ev.content });
-              scrollBottom();
-              break;
-            case 'done':
+             case 'error':
+               closeAllCards();
+               timeline.push({ kind: 'error', content: ev.content });
+               scrollBottom();
+               break;
+             case 'compact':
+               timeline.push({ kind: 'compact', content: ev.content });
+               scrollBottom();
+               break;
+             case 'done':
               closeAllCards();
               currentEventSource.close(); currentEventSource = null;
               if (currentSessionId.value) sessionLoading[currentSessionId.value] = false;
               finalItem = null;
               if (opts.onDone) opts.onDone();
+              // 任务完成时清理 sessionTaskMap
+              if (currentSessionId.value) {
+                delete sessionTaskMap[currentSessionId.value];
+                localStorage.removeItem('task_map_' + currentSessionId.value);
+              }
               break;
           }
         } catch (err) { console.error(err); }
@@ -915,14 +982,20 @@ createApp({
        };
     };
 
-     // ── 恢复任务 ──
-     const resumeTask = async (taskId) => {
-       if (!taskId) return;
-       if (currentEventSource) currentEventSource.close();
-       if (currentSessionId.value) sessionLoading[currentSessionId.value] = true;
-       currentEventSource = new EventSource(`/tasks/${taskId}/stream?last_index=0`);
-       attachStreamHandlers(currentEventSource);
-     };
+    // ── 恢复任务 ──
+    const resumeTask = async (sid, taskId, lastEventIndex = 0) => {
+      if (!taskId) return;
+      if (currentEventSource) currentEventSource.close();
+       sessionLoading[sid] = true;
+       activeSessions.add(sid);  // 新增这行
+       currentEventSource = new EventSource(
+         `/tasks/${taskId}/stream?last_index=${lastEventIndex}`
+       );
+       attachStreamHandlers(currentEventSource, {
+        onFinal: () => fetchSessions(),
+        onDone: () => nextTick(() => chatInput.value?.focus()),
+      });
+    };
 
     // ── 发送 ──
      const send = async () => {
@@ -963,13 +1036,14 @@ createApp({
        attachStreamHandlers(currentEventSource, {
          onSessionId: (ev) => { currentSessionId.value = ev.session_id; if (ev.session_id) sessionLoading[ev.session_id] = true; fetchSessions(); },
          onTaskId: (ev) => {
-          currentTaskId.value = ev.task_id;
-          if (currentSessionId.value) {
-            // sessionTaskMap 与 currentTaskId 保持同步（双份状态：前者跨会话持久化，后者是当前快捷引用）
-            sessionTaskMap[currentSessionId.value] = ev.task_id;
-            localStorage.setItem('task_map_' + currentSessionId.value, ev.task_id);
-          }
-        },
+           currentTaskId.value = ev.task_id;
+           if (currentSessionId.value) {
+             // sessionTaskMap 与 currentTaskId 保持同步（双份状态：前者跨会话持久化，后者是当前快捷引用）
+             sessionTaskMap[currentSessionId.value] = { taskId: ev.task_id, lastEventIndex: 0 };
+             localStorage.setItem('task_map_' + currentSessionId.value, JSON.stringify(sessionTaskMap[currentSessionId.value]));
+             activeSessions.add(currentSessionId.value);  // 新增这行
+           }
+         },
         onFinal: () => fetchSessions(),
         onDone: () => nextTick(() => chatInput.value?.focus()),
       });
@@ -1003,7 +1077,15 @@ createApp({
         .filter(k => k.startsWith('task_map_'))
         .forEach(k => {
           const sid = k.replace('task_map_', '');
-          sessionTaskMap[sid] = localStorage.getItem(k);
+          const stored = localStorage.getItem(k);
+          if (stored) {
+            try {
+              sessionTaskMap[sid] = JSON.parse(stored);
+            } catch {
+              // 兼容旧格式（纯字符串 taskId）
+              sessionTaskMap[sid] = { taskId: stored, lastEventIndex: 0 };
+            }
+          }
         });
 
       await updateMeta(true);  // 首次加载，应用默认模型
@@ -1025,6 +1107,7 @@ createApp({
        chatBody, landingInput, chatInput,
        send, newChat, resumeTask, onKey, truncate, renderMarkdown,
        switchSession, deleteSession,
+       activeSessions,
      };
   }
 }).mount('#app');
