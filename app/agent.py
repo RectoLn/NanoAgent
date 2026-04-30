@@ -19,14 +19,21 @@ ToolCallAgent：基于 OpenAI Tool Call 协议的 Agent 主循环。
 """
 
 import json
+import re
 import yaml
 from datetime import datetime
 from pathlib import Path
-from typing import Generator, Dict, Any, List, Optional
+from typing import Callable, Generator, Dict, Any, List, Optional
 
 from client import HelloAgentsLLM
 from registry import execute_tool_call, TOOLS_SCHEMA, set_thread_local_todo
 from session_manager import SESSION_MGR
+from session_state import (
+    extract_state_from_message,
+    extract_state_from_messages,
+    format_authoritative_state,
+    merge_state,
+)
 from todo_manager import TodoManager
 
 
@@ -77,12 +84,30 @@ class ToolCallAgent:
         l2_summary = l2_cfg.get("summary", {})
         self.l2_summary_temperature = l2_summary.get("temperature", 0.1)
         self.l2_summary_max_tokens = l2_summary.get("max_tokens", 1000)
+        self.l2_summary_retry_max_tokens = l2_summary.get(
+            "retry_max_tokens",
+            max(self.l2_summary_max_tokens * 3, 1500),
+        )
         self.l2_summary_max_chars = l2_summary.get("max_chars", 800)
+        self.l2_summary_max_input_chars = l2_summary.get("max_input_chars", 24000)
         # Prompt 硬编码（无需配置）
         self.l2_prompt_template = (
-            "请将以下对话历史压缩成一份简洁摘要，保留所有关键决策、"
-            "已完成的操作、重要结论和当前进度，删除冗余推理过程。"
-            "以 Markdown 列表格式输出，最多 800 字。\n\n"
+            "Compress the following conversation history into a structured summary.\n"
+            "Return ONLY a JSON object, no prose, no markdown fences, in exactly this shape:\n\n"
+            "{{\n"
+            '  "progress_summary": "concise bullet list of completed steps, key decisions, and current status",\n'
+            '  "file_knowledge": [\n'
+            '    {{"path": "file or url that was read", "conclusion": "key conclusion from reading it, max 100 chars"}}\n'
+            '  ],\n'
+            '  "state_patch": {{\n'
+            '    "constraints": ["explicit constraints or rules the user stated"],\n'
+            '    "facts": ["verified facts established during the conversation"],\n'
+            '    "invalidated_assumptions": ["assumptions that were explicitly corrected"]\n'
+            "  }}\n"
+            "}}\n\n"
+            "Only include a file in file_knowledge if the conversation contains a tool result "
+            "from reading that file AND a subsequent assistant message drawing a conclusion from it. "
+            "Do not invent conclusions.\n\n"
             "{messages}"
         )
         # 总是保存 transcript（无需配置）
@@ -102,9 +127,36 @@ class ToolCallAgent:
         # 每个 Agent 持有独立的 TodoManager 实例（而非全局单例）
         self.todo = TodoManager()
         if self.session and getattr(self.session, "tasks", None):
-            self.todo.items = [dict(item) for item in self.session.tasks]
+            self.todo.items = self.todo.dedupe_items([dict(item) for item in self.session.tasks])
 
     # ── 上下文压缩：三层策略 ──────────────────────────────────────────────────
+
+    def _is_authoritative_state_message(self, msg: Dict[str, Any]) -> bool:
+        content = msg.get("content") or ""
+        return isinstance(content, str) and content.startswith("[Authoritative Session State]")
+
+    def _inject_authoritative_state(self, messages: List[Dict]) -> List[Dict]:
+        """Return an LLM-ready message copy with durable session state injected."""
+        cleaned = [
+            dict(msg) for msg in messages
+            if not self._is_authoritative_state_message(msg)
+        ]
+        if not self.session:
+            return cleaned
+
+        state_text = format_authoritative_state(getattr(self.session, "state", None))
+        if not state_text:
+            return cleaned
+
+        state_msg = {"role": "user", "content": state_text}
+
+        insert_at = 0
+        while insert_at < len(cleaned) and cleaned[insert_at].get("role") == "system":
+            insert_at += 1
+        if insert_at < len(cleaned) and cleaned[insert_at].get("role") == "user":
+            insert_at += 1
+
+        return cleaned[:insert_at] + [state_msg] + cleaned[insert_at:]
 
     def estimate_tokens(self, messages: List[Dict]) -> int:
         """
@@ -137,6 +189,10 @@ class ToolCallAgent:
         if first_user:
             new_messages.append(first_user)
 
+        state_text = format_authoritative_state(getattr(self.session, "state", None))
+        if state_text:
+            new_messages.append({"role": "user", "content": state_text})
+
         summary_content = f"{self.summary_prefix}{summary}"
         new_messages.append({"role": self.summary_role, "content": summary_content})
 
@@ -151,6 +207,82 @@ class ToolCallAgent:
             new_messages.append(latest_user)
 
         return new_messages
+
+    def _summarize_tool_result(self, content: str) -> str:
+        lines = [line.strip() for line in (content or "").splitlines() if line.strip()]
+        if len(lines) <= 4:
+            return (content or "")[:200]
+        summary = "\n".join(lines[:3] + [f"...({len(lines)} lines total)", lines[-1]])
+        return summary[:300]
+
+    def _fallback_summary(self, messages: List[Dict]) -> str:
+        """Build a deterministic summary when the LLM summarizer is unavailable."""
+        previous_summaries: List[str] = []
+        user_goals: List[str] = []
+        assistant_notes: List[str] = []
+        tool_notes: List[str] = []
+        tool_call_names: List[str] = []
+
+        for msg in messages:
+            role = msg.get("role")
+            content = (msg.get("content") or "").strip()
+            if role == "user":
+                if content.startswith(self.summary_prefix):
+                    previous = content[len(self.summary_prefix):].strip()
+                    if previous:
+                        previous_summaries.append(re.sub(r"\s+", " ", previous)[:700])
+                    continue
+                if content.startswith((
+                    "[Authoritative Session State]",
+                    "[Current task status",
+                    "[上下文摘要]",
+                )):
+                    continue
+                if content:
+                    user_goals.append(re.sub(r"\s+", " ", content)[:180])
+            elif role == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    name = (tc.get("function") or {}).get("name")
+                    if name:
+                        tool_call_names.append(name)
+                if content:
+                    assistant_notes.append(re.sub(r"\s+", " ", content)[:180])
+            elif role == "tool" and content:
+                tool_notes.append(self._summarize_tool_result(content))
+
+        lines = ["LLM 摘要生成失败，已使用本地规则生成兜底摘要。"]
+        if previous_summaries:
+            lines.append("既有摘要：" + "；".join(previous_summaries[-2:]))
+        if user_goals:
+            lines.append(f"用户目标：{user_goals[0]}")
+        if len(user_goals) > 1:
+            lines.append("近期用户补充：" + "；".join(user_goals[-3:]))
+        if tool_call_names:
+            names = list(dict.fromkeys(tool_call_names[-12:]))
+            lines.append("已调用工具：" + "、".join(names))
+        if assistant_notes:
+            lines.append("执行进展：" + "；".join(assistant_notes[-4:]))
+        if tool_notes:
+            lines.append("关键观察：" + "；".join(tool_notes[-6:]))
+        if not self.todo.is_empty():
+            lines.append("当前任务状态：" + re.sub(r"\s+", " ", self.todo.render())[:500])
+
+        return "\n".join(lines)[: max(self.l2_summary_max_chars, 1200)]
+
+    def _is_parseable_summary_json(self, raw_summary: str) -> bool:
+        if not raw_summary:
+            return False
+        try:
+            json_text = re.sub(
+                r"^\s*```(?:json)?\s*|\s*```\s*$",
+                "",
+                raw_summary,
+                flags=re.I | re.S,
+            ).strip()
+            json.loads(json_text)
+            return True
+        except Exception:
+            return False
 
     def micro_compact(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -168,6 +300,14 @@ class ToolCallAgent:
         if len(tool_entries) <= self.l1_keep_recent:
             return messages
 
+        call_id_to_name: Dict[str, str] = {}
+        for msg in messages:
+            for tc in msg.get("tool_calls") or []:
+                cid = tc.get("id")
+                name = (tc.get("function") or {}).get("name", "unknown")
+                if cid:
+                    call_id_to_name[cid] = name
+
         # 需要保留的索引集合（最近 N 条）
         new_messages = list(messages)  # 复制
 
@@ -176,11 +316,21 @@ class ToolCallAgent:
             content = (msg.get("content") or "").strip()
             if len(content) > self.l1_content_threshold:
                  tc_id = msg.get("tool_call_id", "unknown")
+                 summary = self._summarize_tool_result(content)
+                 tool_name = call_id_to_name.get(tc_id, "unknown")
                  new_messages[idx] = {
                      "role": "tool",
                      "tool_call_id": tc_id,
-                     "content": self.l1_placeholder_template.format(tool_call_id=tc_id),
+                     "content": (
+                         f"[Compressed Tool Result | id: {tc_id}]\n"
+                         f"summary: {summary}"
+                     ),
                  }
+                 if self.session:
+                     state = getattr(self.session, "state", None) or {}
+                     self.session.state = state
+                     obs = state.setdefault("observations", {})
+                     obs[tc_id] = {"summary": summary, "tool": tool_name}
         return new_messages
 
     def auto_compact(self, messages: List[Dict]) -> List[Dict]:
@@ -195,8 +345,11 @@ class ToolCallAgent:
             return messages
 
         # 1. 保存 transcript（可选）
+        filename = None
         if self.l2_save_transcript and self.session_id:
-            transcripts_dir = Path(__file__).parent.parent / "workspace" / "transcripts"
+            from tools.workspace import WORKSPACE_DIR
+
+            transcripts_dir = WORKSPACE_DIR / "transcripts"
             transcripts_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filename = transcripts_dir / f"{self.session_id}_{timestamp}.jsonl"
@@ -212,12 +365,47 @@ class ToolCallAgent:
         from tools.summarize import format_messages_for_summary
 
         formatted = format_messages_for_summary(messages)
-        summary_prompt = (
-            self.l2_prompt_template or
-            "请将以下对话历史压缩成一份简洁摘要，保留所有关键决策、"
-            "已完成的操作、重要结论和当前进度，删除冗余推理过程。"
-            "以 Markdown 列表格式输出，最多 800 字。\n\n"
-        ) + formatted
+        formatted_original_chars = len(formatted)
+        if (
+            self.l2_summary_max_input_chars
+            and self.l2_summary_max_input_chars > 0
+            and len(formatted) > self.l2_summary_max_input_chars
+        ):
+            head_chars = int(self.l2_summary_max_input_chars * 0.45)
+            tail_chars = self.l2_summary_max_input_chars - head_chars
+            omitted_chars = len(formatted) - self.l2_summary_max_input_chars
+            formatted = (
+                formatted[:head_chars]
+                + f"\n\n[Summary input truncated: omitted {omitted_chars} chars]\n\n"
+                + formatted[-tail_chars:]
+            )
+        if self.l2_prompt_template:
+            summary_prompt = self.l2_prompt_template.format(messages=formatted)
+        else:
+            summary_prompt = (
+                "Compress the following conversation history. Return ONLY a JSON object, "
+                "with no prose and no markdown fences, in exactly this shape:\n"
+                "{\n"
+                '  "progress_summary": "...",\n'
+                '  "state_patch": {\n'
+                '    "constraints": ["..."],\n'
+                '    "facts": ["..."],\n'
+                '    "invalidated_assumptions": ["..."]\n'
+                "  }\n"
+                "}\n\n"
+                f"{formatted}"
+            )
+
+        summary_prompt_chars = len(summary_prompt)
+        summary_prompt_estimated_tokens = self.estimate_tokens([
+            {"role": "user", "content": summary_prompt}
+        ])
+        summary_used_fallback = False
+        summary_error = ""
+        summary_finish_reason = ""
+        summary_retry_used = False
+        summary_retry_error = ""
+        summary_retry_finish_reason = ""
 
         try:
             response = self.llm.call(
@@ -226,22 +414,134 @@ class ToolCallAgent:
                 temperature=self.l2_summary_temperature,
                 max_tokens=self.l2_summary_max_tokens,
             )
+            if self.session and response and response.get("usage"):
+                usage = response["usage"]
+                self.session.add_token_usage(
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("total_tokens", 0),
+                    update_context=False,
+            )
             if response and "choice" in response:
                 choice = response["choice"]
-                summary = (choice.message.content or "").strip()
+                summary_finish_reason = str(getattr(choice, "finish_reason", "") or "")
+                raw_summary = (choice.message.content or "").strip()
             else:
-                summary = "（摘要生成失败）"
-            if not summary:
-                summary = "（摘要生成失败）"
+                summary_used_fallback = True
+                summary_error = getattr(self.llm, "last_error", None) or "LLM returned no response"
+                raw_summary = self._fallback_summary(messages)
+            if (
+                summary_finish_reason == "length"
+                and (not raw_summary or not self._is_parseable_summary_json(raw_summary))
+            ):
+                summary_retry_used = True
+                retry_response = self.llm.call(
+                    messages=[{"role": "user", "content": summary_prompt}],
+                    tools=None,
+                    temperature=self.l2_summary_temperature,
+                    max_tokens=self.l2_summary_retry_max_tokens,
+                )
+                if self.session and retry_response and retry_response.get("usage"):
+                    usage = retry_response["usage"]
+                    self.session.add_token_usage(
+                        usage.get("prompt_tokens", 0),
+                        usage.get("completion_tokens", 0),
+                        usage.get("total_tokens", 0),
+                        update_context=False,
+                    )
+                if retry_response and "choice" in retry_response:
+                    retry_choice = retry_response["choice"]
+                    summary_retry_finish_reason = str(getattr(retry_choice, "finish_reason", "") or "")
+                    raw_summary = (retry_choice.message.content or "").strip()
+                    if raw_summary:
+                        summary_finish_reason = summary_retry_finish_reason or summary_finish_reason
+                        summary_error = ""
+                else:
+                    summary_retry_error = (
+                        getattr(self.llm, "last_error", None)
+                        or "LLM summary retry returned no response"
+                    )
+            if (
+                raw_summary
+                and summary_finish_reason == "length"
+                and not self._is_parseable_summary_json(raw_summary)
+            ):
+                summary_used_fallback = True
+                summary_error = (
+                    summary_retry_error
+                    or "LLM returned truncated or invalid summary JSON"
+                )
+                raw_summary = self._fallback_summary(messages)
+            if not raw_summary:
+                summary_used_fallback = True
+                summary_error = summary_error or summary_retry_error or "LLM returned empty summary content"
+                raw_summary = self._fallback_summary(messages)
         except Exception as e:
             print(f"[Compression] 摘要生成异常: {e}")
-            summary = "（摘要生成失败）"
+            summary_used_fallback = True
+            summary_error = str(e)
+            raw_summary = self._fallback_summary(messages)
+
+        progress_summary = raw_summary
+        state_patch = {}
+        file_knowledge = []
+        try:
+            # Be tolerant if a model still wraps the JSON in markdown fences.
+            json_text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw_summary, flags=re.I | re.S).strip()
+            parsed_summary = json.loads(json_text)
+            progress_summary = str(parsed_summary.get("progress_summary") or "").strip() or raw_summary
+            state_patch = parsed_summary.get("state_patch") or {}
+            if not isinstance(state_patch, dict):
+                state_patch = {}
+            file_knowledge = parsed_summary.get("file_knowledge") or []
+            if not isinstance(file_knowledge, list):
+                file_knowledge = []
+        except Exception:
+            progress_summary = raw_summary
+            state_patch = {}
+            file_knowledge = []
+
+        summary = progress_summary
 
         # 截断摘要长度
         if self.l2_summary_max_chars > 0 and len(summary) > self.l2_summary_max_chars:
             summary = summary[:self.l2_summary_max_chars] + "…"
 
         # 3. 替换 messages
+        if self.session:
+            rule_patch = extract_state_from_messages(messages)
+            existing_texts = {
+                re.sub(r"\s+", " ", str(item.get("text", ""))).strip().lower()
+                for key in ("constraints", "facts", "invalidated_assumptions")
+                for item in rule_patch.get(key, [])
+            }
+            for key in ("constraints", "facts", "invalidated_assumptions"):
+                values = state_patch.get(key) or []
+                if not isinstance(values, list):
+                    continue
+                for text in values:
+                    dedupe_key = re.sub(r"\s+", " ", text).strip().lower() if isinstance(text, str) else ""
+                    if dedupe_key and dedupe_key not in existing_texts:
+                        existing_texts.add(dedupe_key)
+                        rule_patch[key].append({"text": text.strip(), "source": "llm_inferred"})
+            # file conclusions from read_file / web_fetch
+            for item in file_knowledge:
+                if not isinstance(item, dict):
+                    continue
+                path = (item.get("path") or "").strip()
+                conclusion = (item.get("conclusion") or "").strip()
+                if not path or not conclusion:
+                    continue
+                text = f"{path}: {conclusion}"
+                dedupe_key = re.sub(r"\s+", " ", text).strip().lower()
+                if dedupe_key not in existing_texts:
+                    existing_texts.add(dedupe_key)
+                    rule_patch["facts"].append({
+                        "text": text,
+                        "source": "llm_inferred",
+                    })
+            self.session.update_state(merge_state(getattr(self.session, "state", None), rule_patch))
+
         new_messages = self._build_compacted_messages(messages, summary)
 
         # 4. 记录 compression_history
@@ -249,10 +549,21 @@ class ToolCallAgent:
             token_saved = sum(len((m.get("content") or "").split()) for m in messages)
             record = {
                 "timestamp": datetime.now().isoformat(),
-                "transcript": str(filename) if self.l2_save_transcript and self.session_id else "",
+                "transcript": str(filename) if filename else "",
                 "original_count": len(messages),
                 "compressed_count": len(new_messages),
                 "token_saved": token_saved,
+                "summary_used_fallback": summary_used_fallback,
+                "summary_error": summary_error,
+                "summary_finish_reason": summary_finish_reason,
+                "summary_retry_used": summary_retry_used,
+                "summary_retry_error": summary_retry_error,
+                "summary_retry_finish_reason": summary_retry_finish_reason,
+                "summary_retry_max_tokens": self.l2_summary_retry_max_tokens,
+                "summary_input_chars": len(formatted),
+                "summary_input_original_chars": formatted_original_chars,
+                "summary_prompt_chars": summary_prompt_chars,
+                "summary_prompt_estimated_tokens": summary_prompt_estimated_tokens,
                 "summary": summary,
             }
             self.session.add_compression_record(record)
@@ -263,6 +574,7 @@ class ToolCallAgent:
         self,
         question: str,
         history: Optional[List[Dict]] = None,
+        should_cancel: Optional[Callable[[], bool]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         """
         以生成器方式执行 Tool Call 主循环，逐步产出事件字典。
@@ -279,10 +591,19 @@ class ToolCallAgent:
           {"type": "todo_update",  "items": list}
           {"type": "answer_chunk", "content": str}   # 流式 token
           {"type": "final",        "content": str}   # 完整最终答案
+          {"type": "message_delta", "message": dict} # 已产生并应立即持久化的单条消息
+          {"type": "context_snapshot", "messages": list} # 压缩后的可恢复上下文快照
           {"type": "new_messages", "messages": list} # 本轮新增消息（供 session 追加）
           {"type": "error",        "content": str}
           {"type": "done"}
         """
+        def cancel_requested() -> bool:
+            return bool(should_cancel and should_cancel())
+
+        def cancel_events():
+            yield {"type": "cancelled", "content": "任务已停止"}
+            yield {"type": "done"}
+
         yield {"type": "question", "content": question}
 
         # 如果有 history（含 system），直接使用并追加本轮 user 消息
@@ -298,9 +619,16 @@ class ToolCallAgent:
 
         # 记录本轮新增消息（不含历史），供 session 保存
         new_messages: List[Dict] = [{"role": "user", "content": question}]
+        if self.session:
+            self.session.update_state(extract_state_from_message(new_messages[0]))
+        yield {"type": "message_delta", "message": new_messages[0]}
         round_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for step in range(1, self.max_steps + 1):
+            if cancel_requested():
+                yield from cancel_events()
+                return
+
             # ── Layer 1：micro_compact 每次 LLM 调用前静默执行 ─────────────
             messages = self.micro_compact(messages)
 
@@ -321,14 +649,20 @@ class ToolCallAgent:
                     messages = self.auto_compact(messages)
                     # 重置精准计数（压缩后历史已变，旧值不再适用）
                     self.last_precise_prompt_tokens = None
+                    yield {"type": "context_snapshot", "messages": messages}
                     yield {"type": "compact", "content": "上下文已自动压缩"}
 
             # ── 注入当前 Agent 的 TodoManager 和 Session 到线程局部，供工具函数访问 ──
             set_thread_local_todo(self.todo, self.session)
 
             # ── 请求模型（非流式，获取 tool_calls 或 stop）──────────────
+            if cancel_requested():
+                yield from cancel_events()
+                return
+
+            llm_messages = self._inject_authoritative_state(messages)
             response = self.llm.call(
-                messages=messages,
+                messages=llm_messages,
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
                 temperature=self.temperature,
@@ -368,6 +702,10 @@ class ToolCallAgent:
                     "context_usage": self.session.context_usage.copy(),
                 }
 
+            if cancel_requested():
+                yield from cancel_events()
+                return
+
             message = choice.message
             finish_reason = choice.finish_reason
 
@@ -405,6 +743,9 @@ class ToolCallAgent:
                     for event in self.llm.think_stream(
                         stream_messages, temperature=self.temperature
                     ):
+                        if cancel_requested():
+                            yield from cancel_events()
+                            return
                         if event["type"] == "content":
                             full += event["content"]
                             yield {"type": "answer_chunk", "content": event["content"]}
@@ -417,12 +758,16 @@ class ToolCallAgent:
                     new_messages[-1]["content"] = final_text
                     new_messages[-1]["usage"] = round_usage.copy()
 
+                yield {"type": "message_delta", "message": new_messages[-1]}
+
                 yield {"type": "new_messages", "messages": new_messages}
                 yield {"type": "done"}
                 return
 
             # ── 情况 2：模型要调用工具 ──────────────────────────────────
             if finish_reason == "tool_calls" and message.tool_calls:
+                yield {"type": "message_delta", "message": msg_dict}
+                compacted_this_turn = False
                 for tc in message.tool_calls:
                     tool_name = tc.function.name
                     args_json = tc.function.arguments or "{}"
@@ -441,9 +786,11 @@ class ToolCallAgent:
                     if tool_name == "compact":
                         # 执行 auto_compact（与 Layer 2 完全相同的流程）
                         messages = self.auto_compact(messages)
+                        yield {"type": "context_snapshot", "messages": messages}
                         yield {"type": "compact", "content": "上下文已手动压缩"}
-                        # compact 工具不产生 tool_msg，直接进入下一轮
-                        continue
+                        # compact 会重写上下文快照；其余工具让模型在下一轮重新决定。
+                        compacted_this_turn = True
+                        break
 
                     # 执行工具
                     result = execute_tool_call(tool_name, args_json)
@@ -453,7 +800,7 @@ class ToolCallAgent:
                     yield {"type": "observation", "content": result, "call_id": call_id}
 
                     # todo 工具：同步推 todo_update
-                    if tool_name == "todo":
+                    if tool_name in {"todo", "todo_add", "todo_update", "todo_replan"}:
                         yield {"type": "todo_update", "items": list(self.todo.items)}
 
                     # 把工具结果追加到 messages
@@ -464,10 +811,21 @@ class ToolCallAgent:
                     }
                     messages.append(tool_msg)
                     new_messages.append(tool_msg)
+                    yield {"type": "message_delta", "message": tool_msg}
+
+                if compacted_this_turn:
+                    if cancel_requested():
+                        yield from cancel_events()
+                        return
+                    continue
 
                 continue  # 继续下一轮，让模型观察结果
 
             # ── 情况 3：length（输出被截断）───────────────────────────
+            if cancel_requested():
+                yield from cancel_events()
+                return
+
             if finish_reason == "length":
                 if message.content and not message.tool_calls:
                     # 纯文本截断：直接将已生成内容作为最终答案输出。
@@ -480,6 +838,7 @@ class ToolCallAgent:
                         new_messages[-1]["usage"] = round_usage.copy()
                     print(f"[Agent] step={step} 文本输出被截断，以现有内容作为最终答案")
                     yield {"type": "final", "content": final_text}
+                    yield {"type": "message_delta", "message": new_messages[-1]}
                     yield {"type": "new_messages", "messages": new_messages}
                     yield {"type": "done"}
                     return

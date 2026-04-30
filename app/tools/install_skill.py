@@ -196,31 +196,173 @@ def _temporary_dir():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _create_wiki_doc(skill_name: str, skill_dir: Path) -> None:
+def _frontmatter_title(skill_name: str, frontmatter: Dict) -> str:
+    return str(frontmatter.get("title") or frontmatter.get("name") or skill_name)
+
+
+def _first_heading(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+    return ""
+
+
+def _first_section_excerpt(text: str, max_lines: int = 8) -> str:
+    lines = []
+    in_frontmatter = text.startswith("---")
+    frontmatter_delimiters = 0
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if in_frontmatter:
+            if line == "---":
+                frontmatter_delimiters += 1
+                if frontmatter_delimiters >= 2:
+                    in_frontmatter = False
+            continue
+        if line.startswith("# "):
+            continue
+        if line.strip():
+            lines.append(line)
+        if len(lines) >= max_lines:
+            break
+    return "\n".join(lines)
+
+
+def _list_skill_resources(skill_dir: Path) -> List[str]:
+    resources = []
+    for child in sorted(skill_dir.iterdir(), key=lambda path: path.name.lower()):
+        if child.name == "SKILL.md":
+            continue
+        if child.is_dir():
+            count = sum(1 for item in child.rglob("*") if item.is_file())
+            resources.append(f"- `{child.name}/` ({count} files)")
+        else:
+            resources.append(f"- `{child.name}`")
+    return resources or ["- No bundled resources found"]
+
+
+def _validate_skill_installation(
+    skill_dir: Path,
+    binaries: List[str],
+    missing_binaries: List[str],
+) -> List[str]:
+    skill_md = skill_dir / "SKILL.md"
+    checks = []
+
+    if skill_md.exists():
+        checks.append("- PASS: `SKILL.md` exists")
+        content = skill_md.read_text(encoding="utf-8").strip()
+        checks.append("- PASS: `SKILL.md` is readable" if content else "- FAIL: `SKILL.md` is empty")
+        checks.append("- PASS: frontmatter parsed" if _read_frontmatter(skill_md) else "- WARN: no YAML frontmatter parsed")
+    else:
+        checks.append("- FAIL: `SKILL.md` missing")
+
+    if binaries:
+        if missing_binaries:
+            checks.append(f"- WARN: missing required binaries: {', '.join(missing_binaries)}")
+        else:
+            checks.append("- PASS: all required binaries are available")
+    else:
+        checks.append("- PASS: no `required_binaries` declared")
+
+    return checks
+
+
+def _initial_experience(skill_name: str, skill_dir: Path) -> Dict[str, str]:
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
+        return {
+            "title": skill_name,
+            "description": "",
+            "overview": "- `SKILL.md` missing; reinstall or inspect the source package.",
+        }
+
+    text = skill_md.read_text(encoding="utf-8")
+    frontmatter = _read_frontmatter(skill_md)
+    title = _frontmatter_title(skill_name, frontmatter)
+    description = str(frontmatter.get("description") or "").strip()
+    heading = _first_heading(text)
+    excerpt = _first_section_excerpt(text)
+
+    overview_parts = []
+    if description:
+        overview_parts.append(description)
+    if heading and heading != title:
+        overview_parts.append(f"Primary heading: {heading}")
+    if excerpt:
+        overview_parts.append(excerpt)
+
+    return {
+        "title": title,
+        "description": description,
+        "overview": "\n\n".join(overview_parts) or "- Read `SKILL.md` before using this skill.",
+    }
+
+
+def _create_wiki_doc(
+    skill_name: str,
+    skill_dir: Path,
+    source_label: str,
+    binaries: List[str],
+    missing_binaries: List[str],
+) -> Path:
     wiki_dir = WORKSPACE_DIR / "wiki" / "skills"
     wiki_dir.mkdir(parents=True, exist_ok=True)
     wiki_path = wiki_dir / f"{skill_name}.md"
     if wiki_path.exists():
-        return
+        return wiki_path
 
-    title = skill_name.replace("-", " ").replace("_", " ").title()
+    date = datetime.now().strftime("%Y-%m-%d")
+    experience = _initial_experience(skill_name, skill_dir)
+    checks = "\n".join(_validate_skill_installation(skill_dir, binaries, missing_binaries))
+    resources = "\n".join(_list_skill_resources(skill_dir))
+    dependencies = (
+        f"- Declared: {', '.join(binaries)}\n"
+        f"- Missing: {', '.join(missing_binaries) if missing_binaries else 'none'}"
+        if binaries
+        else "- No required binaries declared"
+    )
     wiki_content = f"""---
-title: {title}
-updated: {datetime.now().strftime("%Y-%m-%d")}
+title: {experience["title"]}
+updated: {date}
 avg_steps: 1
-tags: [{skill_name}]
+tags: [{skill_name}, installed-skill]
 ---
 
 # 适用场景
+{experience["description"] or "- 待实际使用后补充"}
+
+# 初始使用经验
+- 安装来源: {source_label}
+- 安装路径: `{skill_dir}`
+- Skill 定义: `workspace/skills/{skill_name}/SKILL.md`
+
+# Skill 摘要
+{experience["overview"]}
+
+# 可用性验证
+{checks}
+
+# 依赖检查
+{dependencies}
+
+# 资源结构
+{resources}
 
 # 最优流程
+- 首次使用前读取 `workspace/skills/{skill_name}/SKILL.md`
+- 根据任务需要再读取 bundled resources，例如 `references/`、`assets/` 或 `scripts/`
+- 完成真实任务后，把有效流程、坑点和验证结果追加到本页
 
 # 已知的坑
+- 待实际使用后补充
 
-# 验证步骤
-- Installed from {skill_dir}
+# 使用记录
+- {date}: install_skill 初始化此经验页。
 """
     wiki_path.write_text(wiki_content, encoding="utf-8")
+    return wiki_path
 
 
 def _append_once(path: Path, marker: str, line: str) -> None:
@@ -312,15 +454,23 @@ def install_skill(url: str) -> str:
         else:
             skill_name, skill_dir, binaries, missing_binaries, source_label = _install_from_clawhub(source)
 
-        _create_wiki_doc(skill_name, skill_dir)
+        wiki_path = _create_wiki_doc(
+            skill_name,
+            skill_dir,
+            source_label,
+            binaries,
+            missing_binaries,
+        )
         _update_indexes(skill_name)
         _update_log(skill_name, source_label)
 
         summary = [
             f"Installed {skill_name} skill",
             f"Path: {skill_dir}",
+            f"Wiki: {wiki_path}",
             f"Source: {source_label}",
             "Updated: workspace/skills, wiki/skills document, indexes, and log",
+            "Validation: static installation checks written to wiki",
         ]
         if binaries:
             summary.append(f"Required binaries: {', '.join(binaries)}")

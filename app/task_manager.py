@@ -4,7 +4,7 @@ Task Manager: 独立运行任务，支持断开重连观察。
 TaskState:
 - task_id: str
 - session_id: str
-- status: pending/running/done/error
+- status: pending/running/done/error/cancelled
 - events: list  # 所有已产生的 events，用于回放
 - thread: Thread
 
@@ -26,7 +26,8 @@ from session_manager import SESSION_MGR
 class TaskState:
     task_id: str
     session_id: str
-    status: str = "pending"  # pending/running/done/error
+    status: str = "pending"  # pending/running/done/error/cancelled
+    cancel_requested: bool = False
     events: List[Dict[str, Any]] = field(default_factory=list)
     thread: Optional[threading.Thread] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -50,27 +51,40 @@ class TaskManager:
 
         session = SESSION_MGR.get(session_id)
 
+        def should_cancel() -> bool:
+            with task_state.lock:
+                return task_state.cancel_requested
+
         def run_task():
             with task_state.lock:
                 task_state.status = "running"
 
             try:
-                for event in agent.run_iter(question, history=history):
+                for event in agent.run_iter(
+                    question,
+                    history=history,
+                    should_cancel=should_cancel,
+                ):
                     # 在线程内直接处理消息和 todo，与前端连接无关
-                    if event["type"] == "new_messages" and session:
-                        for msg in event["messages"]:
-                            session.add_message(msg)
-                        # 每收到 new_messages 就立即持久化
+                    if event["type"] == "message_delta" and session:
+                        session.add_message(event["message"])
+                        SESSION_MGR._save_session(session_id)
+                    elif event["type"] == "context_snapshot" and session:
+                        # Snapshot replaces prior deltas after compaction; keep this after message_delta handling.
+                        session.replace_messages_from_llm(event["messages"])
                         SESSION_MGR._save_session(session_id)
                     elif event["type"] == "todo_update" and session:
                         session.tasks = event["items"]
-
+                        SESSION_MGR._save_session(session_id)
 
                     with task_state.lock:
                         task_state.events.append(event)
 
                 with task_state.lock:
-                    task_state.status = "done"
+                    if task_state.cancel_requested:
+                        task_state.status = "cancelled"
+                    else:
+                        task_state.status = "done"
 
             except Exception as e:
                 with task_state.lock:
@@ -89,6 +103,18 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[TaskState]:
         """获取任务状态"""
         return self.tasks.get(task_id)
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Request a task to stop after the current non-interruptible operation."""
+        task = self.get_task(task_id)
+        if not task:
+            return False
+
+        with task.lock:
+            if task.status in ["done", "error", "cancelled"]:
+                return True
+            task.cancel_requested = True
+            return True
 
     def get_events_from_index(
         self, task_id: str, last_index: int
@@ -109,7 +135,7 @@ class TaskManager:
         if not task:
             return True
         with task.lock:
-            return task.status in ["done", "error"]
+            return task.status in ["done", "error", "cancelled"]
 
 
 # 全局 TaskManager 实例

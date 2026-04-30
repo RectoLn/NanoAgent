@@ -17,6 +17,8 @@
 - **Telegram Bot**：基于 Long Polling 的消息平台集成（无需公网地址），在 Telegram 中直接与 Agent 对话
 - **上下文压缩**：自动压缩长对话历史为智能摘要，防止 token 溢出，压缩记录内置存储于会话文件
 - **上下文压缩锚点**：压缩后保留 system prompt、初始用户输入、最新用户输入，以及当前权威 Todo/任务状态。
+- **摘要可靠性兜底**：记录 LLM 摘要 finish_reason，遇到截断摘要自动重试，本地兜底会继承既有摘要，避免越压越丢信息。
+- **展示历史 / 模型上下文分离**：刷新页面展示完整历史，对大模型发送的上下文单独压缩。
 - **Token 统计持久化**：回答卡片保存本轮 usage，刷新或切换会话后仍可恢复；会话列表区分当前上下文窗口占用和会话累计消耗。
 
 ## 上下文与 Token 统计
@@ -27,7 +29,7 @@ NanoAgent 将三个容易混淆的 token 指标拆开处理：
 - **当前上下文窗口**：写入 session 的 `context_usage` 字段，表示最近一次请求的 prompt/window 占用，前端显示为 `ctx 当前 / 模型窗口`。
 - **会话累计消耗**：写入 session 的 `token_usage` 字段，表示整个会话累计花费，可超过模型窗口，只作为成本/历史统计。
 
-上下文压缩不会只留下单条摘要，而是保留稳定锚点：system prompt、第一条用户请求、压缩摘要、当前 Todo/任务状态、最新用户请求。
+上下文压缩不会只留下单条摘要，而是保留稳定锚点：system prompt、第一条用户请求、压缩摘要、当前 Todo/任务状态、最新用户请求。UI 展示历史与模型上下文分离，刷新后仍展示完整对话，只有发送给大模型的部分会被压缩。
 
 ## 快速开始
 
@@ -81,10 +83,14 @@ Agent 行为可以通过 `app/config.yaml` 自定义：
 | `agent.temperature` | LLM 温度参数（创造性 vs 一致性） | 0.1 |
 | `agent.max_tokens` | 每次 LLM 调用的最大输出 token 数 | 16384 |
 | `agent.nag_threshold` | 未调用 todo 工具的连续轮数阈值（注入提醒） | 3 |
-| `context.compress_threshold_tokens` | 触发压缩的词数阈值（非 system 消息） | 6000 |
-| `context.compress_threshold_messages` | 触发压缩的消息数阈值（非 system 消息） | 30 |
-| `context.keep_recent_messages` | 每次压缩保留的最近消息数（不压缩） | 10 |
-| `context.compression_enabled` | 启用/禁用自动压缩（false 用于调试） | true |
+| `compression.enabled` | 启用/禁用自动上下文压缩 | true |
+| `compression.layer1.keep_recent_tool_messages` | 保留最近 N 条完整 tool 结果 | 3 |
+| `compression.layer1.content_threshold` | 旧 tool 结果超过该字符数后压缩为摘要 | 800 |
+| `compression.layer2.token_threshold` | 估算 token 超过该值时触发 L2 摘要压缩 | 20000 |
+| `compression.layer2.message_threshold` | 消息数超过该值时触发 L2 摘要压缩 | 50 |
+| `compression.layer2.summary.max_tokens` | 摘要模型常规输出预算 | 1200 |
+| `compression.layer2.summary.retry_max_tokens` | 摘要被截断时的重试输出预算 | 2400 |
+| `compression.layer2.summary.max_chars` | 解析后写入上下文的摘要字符上限 | 1200 |
 
 **config.yaml 示例：**
 ```yaml
@@ -94,11 +100,19 @@ agent:
   max_tokens: 16384
   nag_threshold: 3
 
-context:
-  compress_threshold_tokens: 6000
-  compress_threshold_messages: 30
-  keep_recent_messages: 10
-  compression_enabled: true
+compression:
+  enabled: true
+  layer1:
+    keep_recent_tool_messages: 3
+    content_threshold: 800
+  layer2:
+    token_threshold: 20000
+    message_threshold: 50
+    summary:
+      temperature: 0.1
+      max_tokens: 1200
+      retry_max_tokens: 2400
+      max_chars: 1200
 ```
 
 ## Telegram Bot

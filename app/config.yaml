@@ -5,7 +5,7 @@
 # 格式："provider:model_id"，provider 可选 kilo / deepseek
 # 用户在前端切换后会保存到浏览器，优先于此配置
 default:
-  model: "kilo:kilo-auto/free"
+  model: "deepseek:deepseek-chat"
 
 # Agent 配置
 agent:
@@ -36,20 +36,21 @@ compression:
   # ── Layer 1 配置 ─────────────────────────────────────────────
   layer1:
     # 保留最近 N 条 tool 结果不截断
-    keep_recent_tool_messages: 5
+    keep_recent_tool_messages: 5 
     # tool 消息 content 长度超过此值（字符数）的旧消息将被截断
-    content_threshold: 500
+    content_threshold: 200
 
   # ── Layer 2 配置 ─────────────────────────────────────────────
   layer2:
     # 触发阈值（满足任一条件即触发）
     #   - 估算 token 数（词数 × 1.3）超过 token_threshold
     #   - 非 system 消息条数超过 message_threshold
-    token_threshold: 30000
-    message_threshold: 30
+    token_threshold: 3000
+    message_threshold: 100
 
     # 摘要生成参数
     summary:
       temperature: 0.1
-      max_tokens: 500  # 降低摘要生成token限制，避免不必要的长输出
-      max_chars: 600   # 相应降低字符数限制
+      max_tokens: 1200  # 摘要模型的常规输出预算
+      retry_max_tokens: 2400  # 若因 length 被截断且内容为空，自动用更大预算重试一次
+      max_chars: 1200  # 压缩后摘要保留足够任务上下文

@@ -119,13 +119,13 @@ if _STATIC_DIR.is_dir():
 # --- 数据模型 ---
 class ChatRequest(BaseModel):
     question: str
-    provider: str = "kilo"
+    provider: str = "deepseek"
     model_id: str = ""
     session_id: Optional[str] = None  # 若提供，则续接已有会话
 
 
 class NewSessionRequest(BaseModel):
-    provider: str = "kilo"
+    provider: str = "deepseek"
     model_id: str = ""
 
 
@@ -170,7 +170,7 @@ def _get_llm_config(provider: str, model_id: str = "") -> dict:
     return {"api_key": api_key, "base_url": base_url, "model": model}
 
 
-def _new_agent(provider: str = "kilo", model_id: str = "", session: Optional[Session] = None) -> ToolCallAgent:
+def _new_agent(provider: str = "deepseek", model_id: str = "", session: Optional[Session] = None) -> ToolCallAgent:
     """每次请求新建 Agent 实例。"""
     config = _get_llm_config(provider, model_id)
     llm = HelloAgentsLLM(**config)
@@ -199,7 +199,7 @@ def health():
 
 
 @app.get("/meta")
-def meta(provider: str = Query("kilo"), model_id: str = Query("")):
+def meta(provider: str = Query("deepseek"), model_id: str = Query("")):
     """返回当前配置元信息，供前端展示状态栏。"""
     try:
         config = _get_llm_config(provider, model_id)
@@ -215,9 +215,9 @@ def meta(provider: str = Query("kilo"), model_id: str = Query("")):
     try:
         with open(_cfg_path, encoding="utf-8") as f:
             _cfg = yaml.safe_load(f)
-        default_model = _cfg.get("default", {}).get("model", "kilo:kilo-auto/free")
+        default_model = _cfg.get("default", {}).get("model", "deepseek:deepseek-chat")
     except Exception:
-        default_model = "kilo:kilo-auto/free"
+        default_model = "deepseek:deepseek-chat"
 
     return {"model_id": model_name, "ctx_len": ctx_len, "default_model": default_model}
 
@@ -232,7 +232,7 @@ def _sse_payload(event: dict) -> str:
 def _poll_task_events(task_id: str, start_index: int = 0):
     """
     公共 SSE 生成器：从 start_index 开始轮询任务事件并推送给前端。
-    跳过 new_messages（已在后台线程持久化）。
+    跳过仅用于后台持久化的内部事件。
     客户端断开时（GeneratorExit）静默退出，后台任务继续运行。
     """
     index = start_index
@@ -240,7 +240,7 @@ def _poll_task_events(task_id: str, start_index: int = 0):
         while True:
             for event in TASK_MGR.get_events_from_index(task_id, index):
                 index += 1
-                if event["type"] == "new_messages":
+                if event["type"] in ("new_messages", "message_delta", "context_snapshot"):
                     continue
                 yield _sse_payload(event)
             if TASK_MGR.is_task_done(task_id):
@@ -305,6 +305,15 @@ def task_stream(
     )
 
 
+@app.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str = FPath(...)):
+    """Request cancellation for a background task."""
+    ok = TASK_MGR.cancel_task(task_id)
+    if not ok:
+        return JSONResponse({"error": "浠诲姟涓嶅瓨鍦?"}, status_code=404)
+    return {"ok": True}
+
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     """
@@ -322,19 +331,21 @@ def chat(req: ChatRequest):
     history = session.get_messages_for_llm()
 
     try:
-        new_msgs: list = []
         final_answer = ""
         for event in agent.run_iter(req.question, history=history):
             if event["type"] == "final":
                 final_answer = event["content"]
-            elif event["type"] == "new_messages":
-                new_msgs = event["messages"]
+            elif event["type"] == "message_delta":
+                session.add_message(event["message"])
+                SESSION_MGR._save_session(session.session_id)
+            elif event["type"] == "context_snapshot":
+                session.replace_messages_from_llm(event["messages"])
+                SESSION_MGR._save_session(session.session_id)
+            elif event["type"] == "todo_update":
+                session.tasks = event["items"]
+                SESSION_MGR._save_session(session.session_id)
     except Exception as e:
         return JSONResponse({"error": f"Agent 执行失败: {e}"}, status_code=500)
-
-    # 保存本轮新消息到 session
-    for msg in new_msgs:
-        session.add_message(msg)
 
     # 保存 session 到文件
     SESSION_MGR._save_session(session.session_id)
@@ -349,7 +360,7 @@ def chat(req: ChatRequest):
 @app.get("/chat/stream")
 def chat_stream(
     question: str = Query(..., description="用户问题"),
-    provider: str = Query("kilo"),
+    provider: str = Query("deepseek"),
     model_id: str = Query(""),
     session_id: str = Query("", description="会话ID，为空则新建会话"),
 ):

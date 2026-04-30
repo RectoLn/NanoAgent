@@ -222,6 +222,15 @@ html, body {
 .send-btn:hover:not(:disabled) { background: #000; }
 .send-btn:active:not(:disabled) { transform: scale(.95); }
 .send-btn:disabled { background: #d1d5db; cursor: not-allowed; }
+.stop-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: none;
+  background: #2d2d2d; color: #fff; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .15s, transform .1s;
+}
+.stop-btn:hover { background: #000; }
+.stop-btn:active { transform: scale(.95); }
+.stop-btn:disabled { background: #d1d5db; cursor: not-allowed; }
 
 /* ─── 消息气泡 ────────────────────────────── */
 .bubble-question {
@@ -342,6 +351,11 @@ html, body {
 .bubble-compact {
   align-self: center; padding: 6px 12px; border-radius: 999px;
   background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+  font-size: 12px; flex-shrink: 0;
+}
+.bubble-cancelled {
+  align-self: center; padding: 6px 12px; border-radius: 999px;
+  background: #f3f4f6; border: 1px solid #e5e7eb; color: #4b5563;
   font-size: 12px; flex-shrink: 0;
 }
 
@@ -563,6 +577,9 @@ html, body {
              <div v-else-if="item.kind === 'compact'" class="bubble-compact">
                📦 {{ item.content }}
              </div>
+             <div v-else-if="item.kind === 'cancelled'" class="bubble-cancelled">
+               {{ item.content }}
+             </div>
              <div v-else-if="item.kind === 'question'" class="bubble-question">{{ item.content }}</div>
              <div v-else-if="item.kind === 'step'" :class="['step-card', { running: item.running, expanded: item.expanded }]">
               <div class="step-header" @click="item.expanded = !item.expanded">
@@ -610,7 +627,17 @@ html, body {
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.84l-8.58 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
              </button>
-             <button class="send-btn" @click="send" :disabled="!question.trim() || sessionLoading[currentSessionId]">
+             <button
+               v-if="sessionLoading[currentSessionId] && currentTaskId"
+               class="stop-btn"
+               @click="cancelCurrentTask"
+               title="停止当前任务"
+             >
+               <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="1.5"/>
+              </svg>
+            </button>
+             <button v-else class="send-btn" @click="send" :disabled="!question.trim() || sessionLoading[currentSessionId]">
                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
               </svg>
@@ -695,7 +722,7 @@ createApp({
     // sessionTaskMap: 所有会话的 session_id -> task_id 持久化映射（localStorage task_map_<sid>）
     // 维护两份状态是为了：currentTaskId 用于快速读取/清空，sessionTaskMap 用于跨会话恢复
     const currentTaskId = ref(null);
-    const selectedModel = ref('kilo:kilo-auto/free');
+    const selectedModel = ref('deepseek:deepseek-chat');
     const ctxLen        = ref('—');
     let turnCount = 0;
     let currentEventSource = null;
@@ -721,7 +748,7 @@ createApp({
     // ── 模型解析 ──
     const parseModel = (s) => {
       const i = s.indexOf(':');
-      return i === -1 ? ['kilo', s] : [s.slice(0, i), s.slice(i + 1)];
+      return i === -1 ? ['deepseek', s] : [s.slice(0, i), s.slice(i + 1)];
     };
 
     // ── Meta ──
@@ -735,7 +762,7 @@ createApp({
           // 首次加载：优先 localStorage，其次 config.yaml 的 default_model
           if (applyDefault) {
             const saved = localStorage.getItem('selectedModel');
-            selectedModel.value = saved || d.default_model || 'kilo:kilo-auto/free';
+            selectedModel.value = saved || d.default_model || 'deepseek:deepseek-chat';
           }
         }
       } catch { ctxLen.value = '—'; }
@@ -982,6 +1009,11 @@ createApp({
                timeline.push({ kind: 'error', content: ev.content });
                scrollBottom();
                break;
+              case 'cancelled':
+                closeAllCards();
+                timeline.push({ kind: 'cancelled', content: ev.content || '任务已停止' });
+                scrollBottom();
+                break;
               case 'compact':
                 timeline.push({ kind: 'compact', content: ev.content });
                 scrollBottom();
@@ -1049,6 +1081,17 @@ createApp({
         onFinal: () => fetchSessions(),
         onDone: () => nextTick(() => chatInput.value?.focus()),
       });
+    };
+
+    const cancelCurrentTask = async () => {
+      const taskId = currentTaskId.value;
+      if (!taskId) return;
+      try {
+        await fetch(`/tasks/${taskId}/cancel`, { method: 'POST' });
+      } catch (e) {
+        timeline.push({ kind: 'error', content: '停止请求发送失败' });
+        scrollBottom();
+      }
     };
 
     // ── 发送 ──
@@ -1160,7 +1203,7 @@ createApp({
        completedCount, progressPct,
        sidebarOpen, todoOpen,
        chatBody, landingInput, chatInput,
-       send, newChat, resumeTask, onKey, truncate, formatTokens, sessionTokenTitle, renderMarkdown,
+       send, newChat, resumeTask, cancelCurrentTask, onKey, truncate, formatTokens, sessionTokenTitle, renderMarkdown,
        switchSession, deleteSession,
        activeSessions,
      };

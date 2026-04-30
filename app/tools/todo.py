@@ -6,8 +6,9 @@ from registry import tool, get_thread_local_todo
 @tool(
     name="todo",
     description=(
-        "管理多步任务的 todo 列表。整体替换当前列表。"
-        "参数为 JSON 数组字符串，每项包含 id / text / status。"
+        "管理多步任务的 todo 列表。默认基于当前列表更新状态，避免误开新计划。"
+        "参数可为 JSON 数组字符串，每项包含 id / text / status；"
+        "如用户明确开始无关新任务，可传 {\"reset\": true, \"items\": [...]}。"
         "status 取值：pending / in_progress / completed / cancelled。"
         "同一时间最多 1 个 in_progress（强制聚焦）。"
         "示例："
@@ -31,8 +32,15 @@ def todo(raw_input: str = "") -> str:
         return todo_manager.render()
 
     try:
-        items = json.loads(raw_input)
+        payload = json.loads(raw_input)
     except json.JSONDecodeError as e:
         return f"错误：JSON 解析失败：{e}。参数应为 JSON 数组字符串。"
 
-    return todo_manager.update(items)
+    allow_reset = False
+    if isinstance(payload, dict):
+        allow_reset = bool(payload.get("reset"))
+        items = payload.get("items")
+    else:
+        items = payload
+
+    return todo_manager.update(items, allow_reset=allow_reset)

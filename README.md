@@ -17,6 +17,8 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Telegram Bot**: Long Polling integration—send messages to Bot, get Agent responses directly in Telegram (no ngrok required)
 - **Context Compression**: Automatic context summarization for extended conversations, prevents token limit overflow
 - **Context-Aware Compaction Anchors**: Compacted history preserves the system prompt, initial user request, latest user request, and authoritative task status
+- **Reliable Summary Fallback**: LLM summaries record finish reasons, retry on truncated output, and preserve prior summaries when falling back locally
+- **Split UI History / LLM Context**: Refresh shows the full display history while only the model-facing context is compacted
 - **Token Usage Tracking**: Per-answer token usage is persisted, while session lists show current context-window usage separately from lifetime token spend
 
 ## Context and Token Handling
@@ -27,7 +29,7 @@ NanoAgent separates three related but different token concepts:
 - **Current context usage**: Stored as `context_usage`, representing the latest prompt/window footprint shown as `ctx current / model context length` in the session list.
 - **Lifetime usage**: Stored as `token_usage`, representing cumulative tokens spent by the whole session. This can exceed the model context length and is shown as supporting metadata rather than the active window size.
 
-When context is compacted, NanoAgent keeps stable anchors instead of replacing everything with a single summary: system prompt, first user request, compacted summary, current todo/task status, and latest user request.
+When context is compacted, NanoAgent keeps stable anchors instead of replacing everything with a single summary: system prompt, first user request, compacted summary, current todo/task status, and latest user request. The persisted UI history remains separate from the compacted LLM context, so refresh can still show the original conversation.
 
 ## Quick Start
 
@@ -81,10 +83,14 @@ Agent behavior can be customized via `app/config.yaml`:
 | `agent.temperature` | LLM temperature (creativity vs consistency) | 0.1 |
 | `agent.max_tokens` | Max output tokens per LLM call | 16384 |
 | `agent.nag_threshold` | Rounds without todo tool before reminder injection | 3 |
-| `context.compress_threshold_tokens` | Trigger compression when non-system messages exceed N words | 6000 |
-| `context.compress_threshold_messages` | Trigger compression when non-system messages exceed N | 30 |
-| `context.keep_recent_messages` | Always preserve the N most recent messages (not compressed) | 10 |
-| `context.compression_enabled` | Toggle automatic context compression (false for debugging) | true |
+| `compression.enabled` | Toggle automatic context compression | true |
+| `compression.layer1.keep_recent_tool_messages` | Keep the latest N tool results uncompressed | 3 |
+| `compression.layer1.content_threshold` | Compress older tool results above this character length | 800 |
+| `compression.layer2.token_threshold` | Trigger L2 summary compaction above this estimated token count | 20000 |
+| `compression.layer2.message_threshold` | Trigger L2 summary compaction above this message count | 50 |
+| `compression.layer2.summary.max_tokens` | Normal LLM summary output budget | 1200 |
+| `compression.layer2.summary.retry_max_tokens` | Retry budget when a summary is truncated | 2400 |
+| `compression.layer2.summary.max_chars` | Max stored summary characters after parsing | 1200 |
 
 **Example config.yaml:**
 ```yaml
@@ -94,11 +100,19 @@ agent:
   max_tokens: 16384
   nag_threshold: 3
 
-context:
-  compress_threshold_tokens: 6000
-  compress_threshold_messages: 30
-  keep_recent_messages: 10
-  compression_enabled: true
+compression:
+  enabled: true
+  layer1:
+    keep_recent_tool_messages: 3
+    content_threshold: 800
+  layer2:
+    token_threshold: 20000
+    message_threshold: 50
+    summary:
+      temperature: 0.1
+      max_tokens: 1200
+      retry_max_tokens: 2400
+      max_chars: 1200
 ```
 
 ## Telegram Bot

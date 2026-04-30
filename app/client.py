@@ -24,6 +24,7 @@ class HelloAgentsLLM:
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.base_url = base_url or os.getenv("LLM_BASE_URL")
         self.model = model or os.getenv("LLM_MODEL_ID")
+        self.last_error: Optional[str] = None
 
         if not all([self.model, self.api_key, self.base_url]):
             raise ValueError(
@@ -62,6 +63,7 @@ class HelloAgentsLLM:
             params["tool_choice"] = tool_choice
 
         try:
+            self.last_error = None
             response = self.client.chat.completions.create(**params)
             return {
                 "choice": response.choices[0],
@@ -73,6 +75,7 @@ class HelloAgentsLLM:
             }
         except Exception as e:
             print(f"❌ LLM 调用失败: {e}")
+            self.last_error = str(e)
             return None
 
     def think_stream(
@@ -98,6 +101,7 @@ class HelloAgentsLLM:
             params["temperature"] = temperature
 
         try:
+            self.last_error = None
             stream = self.client.chat.completions.create(**params)
             for chunk in stream:
                 if not chunk.choices:
@@ -112,4 +116,5 @@ class HelloAgentsLLM:
                     break
         except Exception as e:
             print(f"\n❌ LLM 流式调用失败: {e}")
+            self.last_error = str(e)
             yield {"type": "finish", "reason": "error"}

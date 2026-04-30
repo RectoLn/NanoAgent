@@ -94,6 +94,27 @@ def _exec_todo(tasks: list = None) -> str:
     return todo.update(tasks)
 
 
+def _exec_todo_add(text: str = "", id: str = "", status: str = "pending") -> str:
+    todo = get_thread_local_todo()
+    if todo is None:
+        return "错误：TodoManager 未初始化，请重新启动任务"
+    return todo.add_item(text=text, item_id=id or None, status=status)
+
+
+def _exec_todo_update(id: str = "", status: str = "", text: str = "") -> str:
+    todo = get_thread_local_todo()
+    if todo is None:
+        return "错误：TodoManager 未初始化，请重新启动任务"
+    return todo.update_item(id, status=status or None, text=text or None)
+
+
+def _exec_todo_replan(reason: str = "", tasks: list = None, items: list = None) -> str:
+    todo = get_thread_local_todo()
+    if todo is None:
+        return "错误：TodoManager 未初始化，请重新启动任务"
+    return todo.replan(tasks or items or [], reason=reason)
+
+
 def _exec_get_current_time() -> str:
     from tools.current_time import get_current_time
 
@@ -144,6 +165,9 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "read": _exec_read,
     "write_file": _exec_write_file,
     "edit": _exec_edit,
+    "todo_add": _exec_todo_add,
+    "todo_update": _exec_todo_update,
+    "todo_replan": _exec_todo_replan,
     "todo": _exec_todo,
     "get_current_time": _exec_get_current_time,
     "get_system_info": _exec_get_system_info,
@@ -259,14 +283,61 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "todo",
-            "description": "整体替换任务列表，同一时间最多 1 个 in_progress 任务。",
+            "name": "todo_add",
+            "description": "新增一条 Todo，不替换现有任务列表。适合追加子任务或创建初始计划中的单项任务。",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "可选任务 ID；留空时自动生成。",
+                    },
+                    "text": {"type": "string", "description": "任务内容"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed", "cancelled"],
+                        "description": "任务状态，默认 pending。",
+                    },
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_update",
+            "description": "按 ID 更新单条 Todo 的状态或内容。完成一步、切换 in_progress 时使用它。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "要更新的任务 ID"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed", "cancelled"],
+                        "description": "可选，新状态。",
+                    },
+                    "text": {"type": "string", "description": "可选，新任务内容。"},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_replan",
+            "description": "显式重规划并替换完整 Todo 列表。必须提供 reason；只有原计划不再适用时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "为什么需要替换现有 Todo，不能留空。",
+                    },
                     "tasks": {
                         "type": "array",
-                        "description": "完整的任务列表",
+                        "description": "新的完整任务列表",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -284,9 +355,9 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                             },
                             "required": ["id", "text", "status"],
                         },
-                    }
+                    },
                 },
-                "required": ["tasks"],
+                "required": ["reason", "tasks"],
             },
         },
     },

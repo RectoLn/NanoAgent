@@ -63,6 +63,7 @@ app/
 - **会话持久化**：每个 session 独立 JSON 文件存储
 - **会话切换**：前端支持创建/删除/切换会话
 - **自动恢复**：页面刷新后恢复上次会话
+- **展示历史 / 模型上下文分离**：`display_messages` 保存完整 UI 历史，`messages` 仅作为可压缩的 LLM 上下文
 
 ### ✅ 任务管理 (Todo)
 - **多步骤规划**：Agent 自动分解复杂任务
@@ -107,6 +108,13 @@ app/
 - **路径逃逸防护**：`../` 等逃逸路径一律拒绝，仅允许 workspace/ 内操作
 - **单例导入**：workspace.py 提供 WORKSPACE_DIR、TEMPLATES_DIR 常量
 
+### ✅ 上下文压缩稳定性
+- **三层压缩策略**：Layer 1 压缩旧 tool 结果，Layer 2 生成 LLM 摘要，Layer 3 在异常时本地兜底
+- **摘要重试机制**：记录 `summary_finish_reason`，遇到 `length` 截断或半截 JSON 自动使用更大 `retry_max_tokens` 重试
+- **兜底摘要增强**：LLM 摘要失败时继承既有 `[上下文摘要]`，避免多次压缩后丢失核心任务进展
+- **状态去重与裁剪**：`Authoritative Session State` 对近似重复约束做归一化合并，observations 保留最近 80 条
+- **压缩审计字段**：`compression_history` 记录 fallback、错误原因、重试状态、输入字符数和估算 token
+
 ## 待实现功能
 
 ### 🔄 短期优化 (P0 - 核心基础)
@@ -131,7 +139,7 @@ app/
 
 ### 🔄 长期愿景 (P2 - 高级特性)
 1. **上下文压缩** 
-   - ✅ 已完成：自动压缩触发、LLM 摘要生成、compression.md 审计日志
+   - ✅ 已完成：自动压缩触发、LLM 摘要生成、session 内置 compression_history 审计记录
    - 目标：突破 LLM token 限制，支持超长对话
 
 2. **定时任务** 
@@ -297,6 +305,14 @@ def execute_tool_call(name, args_json):
 - `index.html`：SSE handler 绑定创建时的 `sid` 和 `EventSource`，旧流事件不再误清新会话 loading，也不会污染当前 timeline。
 - `index.html`：Landing 页发送按钮移除 `sessionLoading[null]`，避免新会话首条消息 loading 状态不一致。
 
+**上下文压缩可靠性修正**：
+- `agent.py`：摘要调用记录 `summary_finish_reason`，当 LLM 返回 `length` 且内容为空或 JSON 被截断时，自动使用 `retry_max_tokens` 重试。
+- `agent.py`：LLM 摘要仍失败时使用本地 fallback，但会继承已有 `[上下文摘要]`，避免覆盖掉之前已压缩出的关键进展。
+- `agent.py`：旧 tool 结果压缩为真实摘要，不再提示不存在的 `retrieve_memory()` 工具。
+- `session_state.py`：新增近似重复去重，合并类似“必须使用 guizang-ppt-skill”这类重复约束，并将 observations 裁剪到最近 80 条。
+- `session_manager.py`：展示历史与模型上下文分离，刷新后 UI 使用 `display_messages`，只有发给大模型的 `messages` 会被压缩。
+- `config.yaml`：默认模型切换为 `deepseek:deepseek-chat`；上下文压缩参数更新为 `keep_recent_tool_messages=3`、`content_threshold=800`、`message_threshold=50`、`summary.max_tokens=1200`、`summary.retry_max_tokens=2400`、`summary.max_chars=1200`。
+
 
 ### v0.7 (2026-04-25)
 
@@ -424,4 +440,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-27*
+*最后更新: 2026-04-29*

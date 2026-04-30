@@ -22,6 +22,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from session_state import (
+    default_state,
+    extract_state_from_message,
+    extract_state_from_messages,
+    merge_state,
+    normalize_state,
+)
+
 
 class Session:
     def __init__(self, session_id: str, system_prompt: str = ""):
@@ -32,6 +40,7 @@ class Session:
         # messages 不含 system，system 单独存储
         self.system_prompt = system_prompt
         self.messages: List[Dict[str, Any]] = []
+        self.display_messages: List[Dict[str, Any]] = []
         self.tasks: List[Dict[str, Any]] = []
         # 上下文压缩历史，每条压缩操作追加一条记录
         self.compression_history: List[Dict[str, Any]] = []
@@ -46,15 +55,42 @@ class Session:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+        self.state: Dict[str, Any] = default_state()
 
     def add_message(self, msg: Dict[str, Any]):
         """追加一条消息到历史。"""
-        self.messages.append(msg)
+        stored = dict(msg)
+        self.messages.append(stored)
+        self.display_messages.append(dict(stored))
+        self.state = merge_state(self.state, extract_state_from_message(msg))
         self.updated_at = datetime.now().isoformat()
         # 以第一条用户消息的前20字作为标题
         if self.title == "新对话" and msg.get("role") == "user":
             content = msg.get("content", "") or ""
             self.title = content[:30] + ("…" if len(content) > 30 else "")
+
+    def add_messages(self, messages: List[Dict[str, Any]]) -> None:
+        """批量追加消息。"""
+        for msg in messages:
+            self.add_message(msg)
+
+    def replace_messages_from_llm(self, messages: List[Dict[str, Any]]) -> None:
+        """
+        用当前 LLM 上下文快照替换会话历史。
+
+        Session 单独保存 system_prompt，因此落盘 messages 中移除 system。
+        这个方法用于上下文压缩后持久化 compact snapshot，保证刷新后恢复的
+        不是压缩前的长历史，也不是空历史。
+        """
+        self.messages = [dict(msg) for msg in messages if msg.get("role") != "system"]
+        self.state = merge_state(self.state, extract_state_from_messages(self.messages))
+        self.updated_at = datetime.now().isoformat()
+        if self.title == "新对话":
+            for msg in self.messages:
+                if msg.get("role") == "user":
+                    content = msg.get("content", "") or ""
+                    self.title = content[:30] + ("…" if len(content) > 30 else "")
+                    break
 
     def get_messages_for_llm(self) -> List[Dict[str, Any]]:
         """返回供 LLM 使用的完整消息列表（含 system）。"""
@@ -71,18 +107,70 @@ class Session:
             "title": self.title,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "message_count": len(self.messages),
+            "message_count": len(self.display_messages or self.messages),
             "token_usage": self.token_usage.copy(),
             "context_usage": self.context_usage.copy(),
+            "state": normalize_state(self.state),
         }
 
     def history_to_dict(self) -> Dict[str, Any]:
         """返回含完整消息历史和任务的字典。"""
         return {
             **self.to_dict(),
-            "messages": self.messages,
+            "messages": self.display_messages or self.messages,
             "tasks": self.tasks,
         }
+
+    def rebuild_display_messages_from_transcripts(self) -> None:
+        """Best-effort migration for sessions saved before display_messages existed."""
+        if self.display_messages:
+            return
+
+        rebuilt: List[Dict[str, Any]] = []
+        seen = set()
+
+        def is_internal_user_message(msg: Dict[str, Any]) -> bool:
+            content = msg.get("content") or ""
+            return msg.get("role") == "user" and isinstance(content, str) and content.startswith((
+                "[Authoritative Session State]",
+                "[上下文摘要]",
+                "[Current task status - authoritative]",
+            ))
+
+        def add_visible(msg: Dict[str, Any]) -> None:
+            if msg.get("role") == "system" or is_internal_user_message(msg):
+                return
+            key = json.dumps(msg, ensure_ascii=False, sort_keys=True)
+            if key in seen:
+                return
+            seen.add(key)
+            rebuilt.append(dict(msg))
+
+        app_root = Path(__file__).parent
+        for record in self.compression_history:
+            transcript = record.get("transcript") or ""
+            if not transcript:
+                continue
+            path = Path(transcript)
+            if not path.exists() and transcript.startswith("/app/"):
+                path = app_root / transcript[len("/app/"):]
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        add_visible(json.loads(line))
+            except Exception as e:
+                print(f"重建展示历史失败 {path}: {e}")
+
+        for msg in self.messages:
+            add_visible(msg)
+
+        if rebuilt:
+            self.display_messages = rebuilt
 
     def should_compress(
         self,
@@ -107,16 +195,28 @@ class Session:
         self.compression_history.append(record)
         self.updated_at = datetime.now().isoformat()
 
-    def add_token_usage(self, prompt_tokens: int, completion_tokens: int, total_tokens: int) -> None:
+    def update_state(self, patch: Dict[str, Any]) -> None:
+        """Merge a structured state patch into this session."""
+        self.state = merge_state(self.state, patch)
+        self.updated_at = datetime.now().isoformat()
+
+    def add_token_usage(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        update_context: bool = True,
+    ) -> None:
         """累积 token 使用统计。"""
         self.token_usage["total_prompt_tokens"] += prompt_tokens
         self.token_usage["total_completion_tokens"] += completion_tokens
         self.token_usage["total_tokens"] += total_tokens
-        self.context_usage = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-        }
+        if update_context:
+            self.context_usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
         self.updated_at = datetime.now().isoformat()
 
     def get_compression_candidates(self, keep_recent: int = 10) -> List[Dict]:
@@ -150,7 +250,9 @@ class SessionManager:
             "updated_at": s.updated_at,
             "system_prompt": s.system_prompt,
             "messages": s.messages,
+            "display_messages": s.display_messages,
             "tasks": s.tasks,
+            "state": normalize_state(s.state),
             "compression_history": s.compression_history,
             "token_usage": s.token_usage,
             "context_usage": s.context_usage,
@@ -174,7 +276,10 @@ class SessionManager:
                 s.created_at = d.get("created_at", datetime.now().isoformat())
                 s.updated_at = d.get("updated_at", datetime.now().isoformat())
                 s.messages = d.get("messages", [])
+                s.display_messages = d.get("display_messages", [])
                 s.tasks = d.get("tasks", [])
+                # Persisted state is already the authoritative merged version.
+                s.state = normalize_state(d.get("state"))
                 s.compression_history = d.get("compression_history", [])
                 s.token_usage = d.get("token_usage", {
                     "total_prompt_tokens": 0,
@@ -186,6 +291,7 @@ class SessionManager:
                     "completion_tokens": 0,
                     "total_tokens": 0,
                 })
+                s.rebuild_display_messages_from_transcripts()
                 self._sessions[sid] = s
             except Exception as e:
                 print(f"加载 session {file_path.name} 失败: {e}")
