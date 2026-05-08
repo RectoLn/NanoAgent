@@ -8,7 +8,12 @@
 Prompt 模板从 config.yaml + prompts/system.md 分离配置。
 """
 
-from client import HelloAgentsLLM
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.llm.client import LLMClient
 from agent import ToolCallAgent
 
 import tools  # noqa: F401 —— 触发 tools/ 目录自动扫描
@@ -16,7 +21,7 @@ import tools  # noqa: F401 —— 触发 tools/ 目录自动扫描
 
 def main():
     print("🚀 ReAct Agent Demo 启动")
-    llm = HelloAgentsLLM()
+    llm = LLMClient()
     agent = ToolCallAgent(llm=llm)
 
     question = "编辑app/workspace/test.txt，把小诗的后半部分改为豪放派文风"

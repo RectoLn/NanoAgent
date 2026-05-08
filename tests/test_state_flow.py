@@ -2,82 +2,83 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
 
+import agent as agent_module
 from agent import ToolCallAgent
+from app.llm.types import LLMResponse, ToolCall, Usage
 from session_manager import Session
 from session_state import normalize_state
 
 
-def _choice(*, finish_reason, content=None, tool_calls=None):
-    return SimpleNamespace(
-        finish_reason=finish_reason,
-        message=SimpleNamespace(content=content, tool_calls=tool_calls or []),
-    )
-
-
 def _tool_call(call_id, name, arguments):
-    return SimpleNamespace(
+    return ToolCall(
         id=call_id,
-        function=SimpleNamespace(name=name, arguments=json.dumps(arguments, ensure_ascii=False)),
+        name=name,
+        arguments=json.dumps(arguments, ensure_ascii=False),
     )
 
 
 class FakeLLM:
     def __init__(self):
         self.chat_calls = 0
-        self.summary_calls = 0
         self.llm_messages = []
 
     def call(self, messages, tools=None, **kwargs):
-        if tools is None:
-            self.summary_calls += 1
-            return {
-                "choice": _choice(
-                    finish_reason="stop",
-                    content=json.dumps({
-                        "progress_summary": "compressed summary: extracted PDF and read skill docs",
-                        "file_knowledge": [],
-                        "state_patch": {
-                            "constraints": ["不要自己安装skill，使用已有的skill"],
-                            "facts": ["PDF text extracted with PyMuPDF"],
-                            "invalidated_assumptions": [],
-                        },
-                    }, ensure_ascii=False),
-                ),
-                "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
-            }
-
         self.chat_calls += 1
         self.llm_messages.append(messages)
         if self.chat_calls == 1:
-            return {
-                "choice": _choice(
-                    finish_reason="tool_calls",
-                    tool_calls=[
-                        _tool_call(
-                            "call_dup",
-                            "todo_add",
-                            {
-                                "text": "读取guizang-ppt-skill模板和参考资料，了解布局结构",
-                                "status": "pending",
-                            },
-                        )
-                    ],
-                ),
-                "usage": {"prompt_tokens": 200, "completion_tokens": 20, "total_tokens": 220},
-            }
+            return LLMResponse(
+                content=None,
+                finish_reason="tool_calls",
+                tool_calls=[
+                    _tool_call(
+                        "call_dup",
+                        "todo_add",
+                        {
+                            "text": "读取guizang-ppt-skill模板和参考资料，了解布局结构",
+                            "status": "pending",
+                        },
+                    )
+                ],
+                usage=Usage(prompt_tokens=200, completion_tokens=20, total_tokens=220),
+            )
 
-        return {
-            "choice": _choice(finish_reason="stop", content="done"),
-            "usage": {"prompt_tokens": 120, "completion_tokens": 10, "total_tokens": 130},
-        }
+        return LLMResponse(
+            content="done",
+            finish_reason="stop",
+            usage=Usage(prompt_tokens=120, completion_tokens=10, total_tokens=130),
+        )
+
+
+class FakeSummaryLLM:
+    calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def call(self, messages, tools=None, **kwargs):
+        FakeSummaryLLM.calls += 1
+        return LLMResponse(
+            content=json.dumps({
+                "progress_summary": "compressed summary: extracted PDF and read skill docs",
+                "file_knowledge": [],
+                "state_patch": {
+                    "constraints": ["不要自己安装skill，使用已有的skill"],
+                    "facts": ["PDF text extracted with PyMuPDF"],
+                    "invalidated_assumptions": [],
+                },
+            }, ensure_ascii=False),
+            finish_reason="stop",
+            usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+        )
 
 
 class StateFlowTest(unittest.TestCase):
@@ -110,7 +111,13 @@ class StateFlowTest(unittest.TestCase):
         agent.l1_keep_recent = 1
         agent.l1_content_threshold = 80
 
-        events = list(agent.run_iter("继续", history=history))
+        old_client = agent_module.LLMClient
+        FakeSummaryLLM.calls = 0
+        try:
+            agent_module.LLMClient = FakeSummaryLLM
+            events = list(agent.run_iter("继续", history=history))
+        finally:
+            agent_module.LLMClient = old_client
 
         self.assertTrue(any(event["type"] == "context_snapshot" for event in events))
         self.assertTrue(any(event["type"] == "compact" for event in events))
@@ -132,7 +139,7 @@ class StateFlowTest(unittest.TestCase):
         snapshot_text = "\n".join(str(message.get("content", "")) for message in snapshot)
         self.assertIn("compressed summary", snapshot_text)
         self.assertIn("Current Todo list:", snapshot_text)
-        self.assertEqual(llm.summary_calls, 1)
+        self.assertEqual(FakeSummaryLLM.calls, 1)
         self.assertGreaterEqual(llm.chat_calls, 2)
 
     def test_state_normalization_removes_constraint_invalidated_overlap(self):

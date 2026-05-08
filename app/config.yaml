@@ -1,11 +1,36 @@
 # Agent 配置文件
 # 运行时配置项，与代码分离
 
-# 默认模型（用户首次打开页面时显示的模型）
-# 格式："provider:model_id"，provider 可选 kilo / deepseek
-# 用户在前端切换后会保存到浏览器，优先于此配置
+# 默认聊天 provider（用户首次打开页面时显示）
+# 用户在前端切换后会保存到浏览器 localStorage，优先于此配置
 default:
-  model: "deepseek:deepseek-chat"
+  provider: "deepseek"
+
+# Provider presets（公开配置；密钥仍放在 .env）
+providers:
+  deepseek:
+    label: "DeepSeek"
+    base_url: "https://api.deepseek.com"
+    default_model: "deepseek-chat"
+    api_key_env: "DEEPSEEK_API_KEY"
+
+  kilo:
+    label: "Kilo"
+    base_url: "https://api.kilo.ai/api/gateway"
+    default_model: "kilo-auto/free"
+    api_key_env: "KILO_API_KEY"
+
+  ollama:
+    label: "Ollama"
+    base_url: "http://host.docker.internal:11434/v1"
+    default_model: "qwen2.5:7b"
+    api_key_env: null
+
+  custom:
+    label: "Custom"
+    base_url: null
+    default_model: null
+    api_key_env: "LLM_API_KEY"
 
 # Agent 配置
 agent:
@@ -36,7 +61,7 @@ compression:
   # ── Layer 1 配置 ─────────────────────────────────────────────
   layer1:
     # 保留最近 N 条 tool 结果不截断
-    keep_recent_tool_messages: 5 
+    keep_recent_tool_messages: 3
     # tool 消息 content 长度超过此值（字符数）的旧消息将被截断
     content_threshold: 200
 
@@ -45,7 +70,7 @@ compression:
     # 触发阈值（满足任一条件即触发）
     #   - 估算 token 数（词数 × 1.3）超过 token_threshold
     #   - 非 system 消息条数超过 message_threshold
-    token_threshold: 3000
+    token_threshold: 5000
     message_threshold: 100
 
     # 摘要生成参数

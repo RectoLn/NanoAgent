@@ -20,12 +20,16 @@ ToolCallAgent：基于 OpenAI Tool Call 协议的 Agent 主循环。
 
 import json
 import re
+import sys
 import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Generator, Dict, Any, List, Optional
 
-from client import HelloAgentsLLM
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.llm.client import LLMClient
+from app.llm.types import LLMResponse, ToolCall, Usage
 from registry import execute_tool_call, TOOLS_SCHEMA, set_thread_local_todo
 from session_manager import SESSION_MGR
 from session_state import (
@@ -52,7 +56,7 @@ def _load_prompt(file_path: str) -> str:
 class ToolCallAgent:
     """Tool Call 模式 Agent"""
 
-    def __init__(self, llm: HelloAgentsLLM, session_id: Optional[str] = None, session = None):
+    def __init__(self, llm: LLMClient, session_id: Optional[str] = None, session = None):
         self.llm = llm
         self.config = _load_config()
         self.session_id = session_id
@@ -408,59 +412,55 @@ class ToolCallAgent:
         summary_retry_finish_reason = ""
 
         try:
-            response = self.llm.call(
+            _summary_llm = LLMClient(purpose="summary")
+            response = _summary_llm.call(
                 messages=[{"role": "user", "content": summary_prompt}],
                 tools=None,
                 temperature=self.l2_summary_temperature,
                 max_tokens=self.l2_summary_max_tokens,
             )
-            if self.session and response and response.get("usage"):
-                usage = response["usage"]
+            if self.session and response and response.usage:
+                usage = response.usage
                 self.session.add_token_usage(
-                    usage.get("prompt_tokens", 0),
-                    usage.get("completion_tokens", 0),
-                    usage.get("total_tokens", 0),
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
                     update_context=False,
             )
-            if response and "choice" in response:
-                choice = response["choice"]
-                summary_finish_reason = str(getattr(choice, "finish_reason", "") or "")
-                raw_summary = (choice.message.content or "").strip()
+            if response:
+                summary_finish_reason = str(response.finish_reason or "")
+                raw_summary = (response.content or "").strip()
             else:
                 summary_used_fallback = True
-                summary_error = getattr(self.llm, "last_error", None) or "LLM returned no response"
+                summary_error = "LLM returned no response"
                 raw_summary = self._fallback_summary(messages)
             if (
                 summary_finish_reason == "length"
                 and (not raw_summary or not self._is_parseable_summary_json(raw_summary))
             ):
                 summary_retry_used = True
-                retry_response = self.llm.call(
+                retry_response = _summary_llm.call(
                     messages=[{"role": "user", "content": summary_prompt}],
                     tools=None,
                     temperature=self.l2_summary_temperature,
                     max_tokens=self.l2_summary_retry_max_tokens,
                 )
-                if self.session and retry_response and retry_response.get("usage"):
-                    usage = retry_response["usage"]
+                if self.session and retry_response and retry_response.usage:
+                    usage = retry_response.usage
                     self.session.add_token_usage(
-                        usage.get("prompt_tokens", 0),
-                        usage.get("completion_tokens", 0),
-                        usage.get("total_tokens", 0),
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens,
                         update_context=False,
                     )
-                if retry_response and "choice" in retry_response:
-                    retry_choice = retry_response["choice"]
-                    summary_retry_finish_reason = str(getattr(retry_choice, "finish_reason", "") or "")
-                    raw_summary = (retry_choice.message.content or "").strip()
+                if retry_response:
+                    summary_retry_finish_reason = str(retry_response.finish_reason or "")
+                    raw_summary = (retry_response.content or "").strip()
                     if raw_summary:
                         summary_finish_reason = summary_retry_finish_reason or summary_finish_reason
                         summary_error = ""
                 else:
-                    summary_retry_error = (
-                        getattr(self.llm, "last_error", None)
-                        or "LLM summary retry returned no response"
-                    )
+                    summary_retry_error = "LLM summary retry returned no response"
             if (
                 raw_summary
                 and summary_finish_reason == "length"
@@ -674,8 +674,12 @@ class ToolCallAgent:
                 yield {"type": "done"}
                 return
 
-            choice = response["choice"]
-            usage = response["usage"]
+            usage_obj = response.usage or Usage()
+            usage = {
+                "prompt_tokens": usage_obj.prompt_tokens,
+                "completion_tokens": usage_obj.completion_tokens,
+                "total_tokens": usage_obj.total_tokens,
+            }
             round_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
             round_usage["completion_tokens"] += usage.get("completion_tokens", 0)
             round_usage["total_tokens"] += usage.get("total_tokens", 0)
@@ -706,31 +710,30 @@ class ToolCallAgent:
                 yield from cancel_events()
                 return
 
-            message = choice.message
-            finish_reason = choice.finish_reason
+            finish_reason = response.finish_reason
 
             # 把 assistant 回复加入历史
             msg_dict = {"role": "assistant"}
-            if message.content:
-                msg_dict["content"] = message.content
-            if message.tool_calls:
+            if response.content:
+                msg_dict["content"] = response.content
+            if response.tool_calls:
                 msg_dict["tool_calls"] = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
                         },
                     }
-                    for tc in message.tool_calls
+                    for tc in response.tool_calls
                 ]
             messages.append(msg_dict)
             new_messages.append(msg_dict)
 
             # ── 情况 1：模型决定停止，输出最终答案 ────────────────────
             if finish_reason == "stop":
-                final_text = message.content or ""
+                final_text = response.content or ""
 
                 # 输出最终答案
                 # 如果 content 已有完整回答就直接推，否则再流式请求一次
@@ -740,7 +743,7 @@ class ToolCallAgent:
                     # 极少数情况：content 为空但 finish_reason=stop，再流式请求
                     full = ""
                     stream_messages = messages[:]  # 包含完整 context
-                    for event in self.llm.think_stream(
+                    for event in self.llm.stream(
                         stream_messages, temperature=self.temperature
                     ):
                         if cancel_requested():
@@ -765,12 +768,12 @@ class ToolCallAgent:
                 return
 
             # ── 情况 2：模型要调用工具 ──────────────────────────────────
-            if finish_reason == "tool_calls" and message.tool_calls:
+            if finish_reason == "tool_calls" and response.tool_calls:
                 yield {"type": "message_delta", "message": msg_dict}
                 compacted_this_turn = False
-                for tc in message.tool_calls:
-                    tool_name = tc.function.name
-                    args_json = tc.function.arguments or "{}"
+                for tc in response.tool_calls:
+                    tool_name = tc.name
+                    args_json = tc.arguments or "{}"
                     call_id = tc.id
 
                     # 给前端发送 tool_call 事件（预览参数摘要）
@@ -827,11 +830,11 @@ class ToolCallAgent:
                 return
 
             if finish_reason == "length":
-                if message.content and not message.tool_calls:
+                if response.content and not response.tool_calls:
                     # 纯文本截断：直接将已生成内容作为最终答案输出。
                     # ❌ 不续写：续写会把更多 partial 消息堆入 context，
                     #            下一步 context 更大，最终导致 API context_length 错误。
-                    final_text = message.content
+                    final_text = response.content
                     # 修正 new_messages 里已追加的 assistant msg（content 可能为空）
                     if new_messages and new_messages[-1].get("role") == "assistant":
                         new_messages[-1]["content"] = final_text

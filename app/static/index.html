@@ -523,12 +523,10 @@ html, body {
         <div class="subtitle">A Minimal ReAct Agent · Tool Call Mode</div>
         <div class="status-bar">
           <div class="status-pill">
-            <select v-model="selectedModel" class="model-select">
-              <option value="kilo:kilo-auto/free">Kilo Auto (Free)</option>
-              <option value="kilo:anthropic/claude-3-5-sonnet">Claude 3.5 Sonnet (Kilo)</option>
-              <option value="kilo:openai/gpt-4o">GPT-4o (Kilo)</option>
-              <option value="deepseek:deepseek-chat">DeepSeek-V3 Chat</option>
-              <option value="deepseek:deepseek-reasoner">DeepSeek-R1 Reasoner</option>
+            <select v-model="selectedProvider" class="model-select">
+              <option v-for="p in providerOptions" :key="p.name" :value="p.name">
+                {{ p.label }}
+              </option>
             </select>
           </div>
           <div class="status-pill"><span>ctx: {{ ctxLen }}</span></div>
@@ -557,12 +555,10 @@ html, body {
           <h2>{{ currentSessionTitle || 'Nano Agents' }}</h2>
           <div class="chat-header-right">
             <div class="status-pill" style="background:#f9fafb; padding:4px 11px;">
-              <select v-model="selectedModel" class="model-select" style="font-size:12px;">
-                <option value="kilo:kilo-auto/free">Kilo Auto</option>
-                <option value="kilo:anthropic/claude-3-5-sonnet">Claude 3.5</option>
-                <option value="kilo:openai/gpt-4o">GPT-4o</option>
-                <option value="deepseek:deepseek-chat">DeepSeek V3</option>
-                <option value="deepseek:deepseek-reasoner">DeepSeek R1</option>
+              <select v-model="selectedProvider" class="model-select" style="font-size:12px;">
+                <option v-for="p in providerOptions" :key="p.name" :value="p.name">
+                  {{ p.label }}
+                </option>
               </select>
             </div>
             <button class="header-btn" @click="newChat">新对话</button>
@@ -722,7 +718,8 @@ createApp({
     // sessionTaskMap: 所有会话的 session_id -> task_id 持久化映射（localStorage task_map_<sid>）
     // 维护两份状态是为了：currentTaskId 用于快速读取/清空，sessionTaskMap 用于跨会话恢复
     const currentTaskId = ref(null);
-    const selectedModel = ref('deepseek:deepseek-chat');
+    const selectedProvider = ref('deepseek');
+    const providerOptions = reactive([]);
     const ctxLen        = ref('—');
     let turnCount = 0;
     let currentEventSource = null;
@@ -745,31 +742,27 @@ createApp({
     const completedCount = computed(() => todos.filter(t => t.status === 'completed').length);
     const progressPct    = computed(() => todos.length === 0 ? 0 : Math.round(100 * completedCount.value / todos.length));
 
-    // ── 模型解析 ──
-    const parseModel = (s) => {
-      const i = s.indexOf(':');
-      return i === -1 ? ['deepseek', s] : [s.slice(0, i), s.slice(i + 1)];
-    };
-
     // ── Meta ──
     const updateMeta = async (applyDefault = false) => {
-      const [provider, model] = parseModel(selectedModel.value);
       try {
-        const r = await fetch(`/meta?provider=${provider}&model_id=${encodeURIComponent(model)}`);
+        const r = await fetch(`/meta?provider=${encodeURIComponent(selectedProvider.value || '')}`);
         if (r.ok) {
           const d = await r.json();
           ctxLen.value = d.ctx_len ? d.ctx_len.toLocaleString() : '—';
-          // 首次加载：优先 localStorage，其次 config.yaml 的 default_model
+          if (Array.isArray(d.providers)) {
+            providerOptions.splice(0, providerOptions.length, ...d.providers);
+          }
+          // 首次加载：优先 localStorage，其次 config.yaml/.env 的 default_provider
           if (applyDefault) {
-            const saved = localStorage.getItem('selectedModel');
-            selectedModel.value = saved || d.default_model || 'deepseek:deepseek-chat';
+            const saved = localStorage.getItem('selectedProvider');
+            selectedProvider.value = saved || d.default_provider || 'deepseek';
           }
         }
       } catch { ctxLen.value = '—'; }
     };
-    // 用户切换模型时保存到 localStorage
-    watch(selectedModel, (v) => {
-      localStorage.setItem('selectedModel', v);
+    // 用户切换 provider 时保存到 localStorage
+    watch(selectedProvider, (v) => {
+      localStorage.setItem('selectedProvider', v);
       updateMeta();
     });
 
@@ -1101,13 +1094,13 @@ createApp({
        if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
        
        // 先获取或创建 session_id（若没有的话）
-       const [provider, model] = parseModel(selectedModel.value);
+       const provider = selectedProvider.value || '';
        let sid = currentSessionId.value;
        
        // 如果没有会话，先创建新会话
        if (!sid) {
          try {
-           const r = await fetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, model_id: model }) });
+           const r = await fetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, model_id: '' }) });
            if (r.ok) {
              const d = await r.json();
              sid = d.session_id;
@@ -1128,7 +1121,7 @@ createApp({
        turnCount++;
        if (turnCount > 1) timeline.push({ kind: 'divider', turn: turnCount });
 
-      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${provider}&model_id=${encodeURIComponent(model)}&session_id=${encodeURIComponent(sid || '')}`;
+      const url = `/chat/stream?question=${encodeURIComponent(q)}&provider=${encodeURIComponent(provider)}&model_id=&session_id=${encodeURIComponent(sid || '')}`;
       currentEventSource = new EventSource(url);
        attachStreamHandlers(currentEventSource, {
          sid,
@@ -1199,7 +1192,7 @@ createApp({
      return {
        question, timeline, todos, sessionLoading, started,
        sessions, currentSessionId, currentSessionTitle, currentTaskId,
-       selectedModel, ctxLen,
+       selectedProvider, providerOptions, ctxLen,
        completedCount, progressPct,
        sidebarOpen, todoOpen,
        chatBody, landingInput, chatInput,

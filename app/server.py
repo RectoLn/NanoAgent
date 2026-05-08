@@ -38,6 +38,7 @@ from typing import Optional
 
 # 确保无论从项目根目录还是 app/ 目录启动，本包内的模块都能正常导入
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import BackgroundTasks, FastAPI, Query, Path as FPath
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,7 +51,12 @@ from dotenv import load_dotenv, find_dotenv
 # 避免 app/.env（空文件）被优先命中而遮蔽根目录的 .env
 load_dotenv(find_dotenv(usecwd=True))
 
-from client import HelloAgentsLLM
+from app.llm.client import LLMClient
+from app.llm.provider_config import (
+    default_provider as resolve_default_provider,
+    provider_options,
+    resolve as resolve_llm_config,
+)
 from agent import ToolCallAgent
 from session_manager import SESSION_MGR, Session
 from task_manager import TASK_MGR
@@ -119,13 +125,13 @@ if _STATIC_DIR.is_dir():
 # --- 数据模型 ---
 class ChatRequest(BaseModel):
     question: str
-    provider: str = "deepseek"
+    provider: str = ""
     model_id: str = ""
     session_id: Optional[str] = None  # 若提供，则续接已有会话
 
 
 class NewSessionRequest(BaseModel):
-    provider: str = "deepseek"
+    provider: str = ""
     model_id: str = ""
 
 
@@ -149,31 +155,10 @@ def load_system_prompt() -> str:
     return template.replace("{soul}", soul).replace("{user_memory}", user)
 
 
-def _get_llm_config(provider: str, model_id: str = "") -> dict:
-    """根据 provider 返回对应的 LLM 配置。"""
-    if provider == "deepseek":
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        base_url = "https://api.deepseek.com"
-        model = model_id or "deepseek-chat"
-    elif provider == "kilo":
-        api_key = os.getenv("KILO_API_KEY", os.getenv("LLM_API_KEY"))
-        base_url = os.getenv("KILO_BASE_URL", os.getenv("LLM_BASE_URL"))
-        model = model_id or os.getenv("KILO_MODEL_ID", os.getenv("LLM_MODEL_ID"))
-    else:
-        api_key = os.getenv("LLM_API_KEY")
-        base_url = os.getenv("LLM_BASE_URL")
-        model = model_id or os.getenv("LLM_MODEL_ID")
-
-    if not all([api_key, base_url, model]):
-        raise ValueError(f"Provider '{provider}' 配置不完整，请检查环境变量")
-
-    return {"api_key": api_key, "base_url": base_url, "model": model}
-
-
-def _new_agent(provider: str = "deepseek", model_id: str = "", session: Optional[Session] = None) -> ToolCallAgent:
+def _new_agent(provider: str = "", model_id: str = "", session: Optional[Session] = None) -> ToolCallAgent:
     """每次请求新建 Agent 实例。"""
-    config = _get_llm_config(provider, model_id)
-    llm = HelloAgentsLLM(**config)
+    override = {"provider": provider, "model_id": model_id} if provider else None
+    llm = LLMClient(purpose="chat", override=override)
     session_id = session.session_id if session else None
     agent = ToolCallAgent(llm=llm, session_id=session_id, session=session)
     # system_prompt 优先使用 session 中已存储的（会话持久化），否则重新加载
@@ -199,27 +184,22 @@ def health():
 
 
 @app.get("/meta")
-def meta(provider: str = Query("deepseek"), model_id: str = Query("")):
+def meta(provider: str = Query(""), model_id: str = Query("")):
     """返回当前配置元信息，供前端展示状态栏。"""
     try:
-        config = _get_llm_config(provider, model_id)
-        model_name = config["model"]
+        override = {"provider": provider, "model_id": model_id} if provider else None
+        config = resolve_llm_config("chat", override)
+        model_name = config.model
     except ValueError as e:
         model_name = f"⚠️ {e}"
     ctx_len = int(os.getenv("LLM_CTX_LEN", "32768"))
 
-    # 读取 config.yaml 中的默认模型
-    import yaml
-
-    _cfg_path = Path(__file__).parent / "config.yaml"
-    try:
-        with open(_cfg_path, encoding="utf-8") as f:
-            _cfg = yaml.safe_load(f)
-        default_model = _cfg.get("default", {}).get("model", "deepseek:deepseek-chat")
-    except Exception:
-        default_model = "deepseek:deepseek-chat"
-
-    return {"model_id": model_name, "ctx_len": ctx_len, "default_model": default_model}
+    return {
+        "model_id": model_name,
+        "ctx_len": ctx_len,
+        "default_provider": resolve_default_provider(),
+        "providers": provider_options(),
+    }
 
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
@@ -360,7 +340,7 @@ def chat(req: ChatRequest):
 @app.get("/chat/stream")
 def chat_stream(
     question: str = Query(..., description="用户问题"),
-    provider: str = Query("deepseek"),
+    provider: str = Query(""),
     model_id: str = Query(""),
     session_id: str = Query("", description="会话ID，为空则新建会话"),
 ):

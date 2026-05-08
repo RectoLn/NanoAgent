@@ -7,7 +7,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 ## Features
 
 - **Tool Call Loop**: Native tool calling based on OpenAI Tool Call protocol
-- **Multi-Provider LLM Support**: DeepSeek (Chat/Reasoner), Kilo (GPT-4o, Claude, etc.)
+- **Provider-Based LLM Support**: OpenAI-compatible providers configured in `app/config.yaml` (DeepSeek, Kilo, Ollama, custom)
 - **Tool System**: Auto-registered tools with `@tool` decorator
 - **ClawHub Skill System**: `install_skill` tool for automated skill installation from ClawHub
 - **Todo Management**: Multi-step task planning and tracking
@@ -17,6 +17,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Telegram Bot**: Long Polling integration—send messages to Bot, get Agent responses directly in Telegram (no ngrok required)
 - **Context Compression**: Automatic context summarization for extended conversations, prevents token limit overflow
 - **Context-Aware Compaction Anchors**: Compacted history preserves the system prompt, initial user request, latest user request, and authoritative task status
+- **Independent Summary Model**: Context summaries can use `SUMMARY_LLM_*` (for example local Ollama) independently from the chat provider
 - **Reliable Summary Fallback**: LLM summaries record finish reasons, retry on truncated output, and preserve prior summaries when falling back locally
 - **Split UI History / LLM Context**: Refresh shows the full display history while only the model-facing context is compacted
 - **Token Usage Tracking**: Per-answer token usage is persisted, while session lists show current context-window usage separately from lifetime token spend
@@ -67,11 +68,18 @@ http://localhost:9090
 
 | Variable | Description |
 |----------|------------|
-| `LLM_API_KEY` | Kilo API Key |
-| `LLM_BASE_URL` | Kilo Gateway URL |
-| `LLM_MODEL_ID` | Model ID (e.g., `kilo-auto/free`) |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key (optional) |
+| `LLM_PROVIDER` | Default chat provider (`deepseek`, `kilo`, `ollama`, or `custom`) |
+| `LLM_MODEL_ID` | Optional chat model override; empty uses the provider preset in `app/config.yaml` |
+| `LLM_API_KEY` | Generic OpenAI-compatible API key fallback |
+| `LLM_BASE_URL` | Optional explicit OpenAI-compatible endpoint override |
+| `DEEPSEEK_API_KEY` | DeepSeek provider API key |
+| `KILO_API_KEY` | Kilo provider API key |
+| `SUMMARY_LLM_PROVIDER` | Optional summary provider; empty reuses the default chat provider |
+| `SUMMARY_LLM_API_KEY` | Optional summary API key |
+| `SUMMARY_LLM_BASE_URL` | Optional summary endpoint override, useful for local Ollama from Docker |
+| `SUMMARY_LLM_MODEL_ID` | Optional summary model override |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token from @BotFather (optional) |
+| `TELEGRAM_POLLING_ENABLED` | Set to `true` to enable Telegram Long Polling |
 
 ## Configuration
 
@@ -79,21 +87,45 @@ Agent behavior can be customized via `app/config.yaml`:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `default.provider` | Default chat provider shown on first load | deepseek |
+| `providers.<name>.base_url` | Provider OpenAI-compatible endpoint preset | varies |
+| `providers.<name>.default_model` | Provider default model when no override is supplied | varies |
+| `providers.<name>.api_key_env` | Environment variable name for this provider's API key | varies |
 | `agent.max_steps` | Maximum reasoning steps per query | 200 |
 | `agent.temperature` | LLM temperature (creativity vs consistency) | 0.1 |
 | `agent.max_tokens` | Max output tokens per LLM call | 16384 |
 | `agent.nag_threshold` | Rounds without todo tool before reminder injection | 3 |
 | `compression.enabled` | Toggle automatic context compression | true |
 | `compression.layer1.keep_recent_tool_messages` | Keep the latest N tool results uncompressed | 3 |
-| `compression.layer1.content_threshold` | Compress older tool results above this character length | 800 |
-| `compression.layer2.token_threshold` | Trigger L2 summary compaction above this estimated token count | 20000 |
-| `compression.layer2.message_threshold` | Trigger L2 summary compaction above this message count | 50 |
+| `compression.layer1.content_threshold` | Compress older tool results above this character length | 200 |
+| `compression.layer2.token_threshold` | Trigger L2 summary compaction above this estimated token count | 5000 |
+| `compression.layer2.message_threshold` | Trigger L2 summary compaction above this message count | 100 |
 | `compression.layer2.summary.max_tokens` | Normal LLM summary output budget | 1200 |
 | `compression.layer2.summary.retry_max_tokens` | Retry budget when a summary is truncated | 2400 |
 | `compression.layer2.summary.max_chars` | Max stored summary characters after parsing | 1200 |
 
 **Example config.yaml:**
 ```yaml
+default:
+  provider: "deepseek"
+
+providers:
+  deepseek:
+    label: "DeepSeek"
+    base_url: "https://api.deepseek.com"
+    default_model: "deepseek-chat"
+    api_key_env: "DEEPSEEK_API_KEY"
+  kilo:
+    label: "Kilo"
+    base_url: "https://api.kilo.ai/api/gateway"
+    default_model: "kilo-auto/free"
+    api_key_env: "KILO_API_KEY"
+  ollama:
+    label: "Ollama"
+    base_url: "http://host.docker.internal:11434/v1"
+    default_model: "qwen2.5:7b"
+    api_key_env: null
+
 agent:
   max_steps: 200
   temperature: 0.1
@@ -104,10 +136,10 @@ compression:
   enabled: true
   layer1:
     keep_recent_tool_messages: 3
-    content_threshold: 800
+    content_threshold: 200
   layer2:
-    token_threshold: 20000
-    message_threshold: 50
+    token_threshold: 5000
+    message_threshold: 100
     summary:
       temperature: 0.1
       max_tokens: 1200
@@ -125,10 +157,11 @@ NanoAgent supports Telegram integration via **Long Polling**—no public IP or n
 2. Add the token to your `.env`:
    ```env
    TELEGRAM_BOT_TOKEN=your:token
+   TELEGRAM_POLLING_ENABLED=true
    ```
 3. Restart the service (Docker or local)
 
-The bot will automatically start polling Telegram for messages. Each Telegram user gets an independent session (`tg_<chat_id>`), so multi-turn conversations work out of the box.
+When `TELEGRAM_POLLING_ENABLED=true`, the bot starts polling Telegram for messages. Each Telegram user gets an independent session (`tg_<chat_id>`), so multi-turn conversations work out of the box.
 
 ### Usage
 
@@ -142,23 +175,27 @@ The bot will automatically start polling Telegram for messages. Each Telegram us
 - Long messages are automatically split (Telegram limit: 4096 chars per message)
 - The `/webhook/telegram` endpoint remains available as a fallback (requires ngrok) if you prefer Webhook mode
 
-## Available Models
+## Providers
 
-| Provider | Model | Description |
-|----------|-------|-------------|
-| DeepSeek | `deepseek-chat` | V3 Chat |
-| DeepSeek | `deepseek-reasoner` | R1 Reasoner |
-| Kilo | `kilo-auto/free` | Auto select free model |
-| Kilo | `anthropic/claude-3-5-sonnet` | Claude 3.5 |
-| Kilo | `openai/gpt-4o` | GPT-4o |
+Provider presets live in `app/config.yaml`. The web UI renders the provider list from this config and stores the selected provider in `localStorage`. Selecting a provider uses its `default_model`; advanced model overrides can still be supplied through `LLM_MODEL_ID` or API parameters.
+
+| Provider | Default Model | Notes |
+|----------|---------------|-------|
+| DeepSeek | `deepseek-chat` | Uses `DEEPSEEK_API_KEY` |
+| Kilo | `kilo-auto/free` | Uses `KILO_API_KEY` |
+| Ollama | `qwen2.5:7b` | Local OpenAI-compatible endpoint; no API key required |
+| Custom | configured manually | Uses `LLM_API_KEY` and usually `LLM_BASE_URL` |
 
 ## Architecture
 
 ```
 app/
 ├── agent.py          # Tool Call loop implementation
-├── client.py        # LLM client (OpenAI compatible)
-├── registry.py     # Tool registry
+├── llm/              # LLM client layer
+│   ├── client.py     # OpenAI-compatible adapter
+│   ├── provider_config.py # Provider resolver from config.yaml + .env
+│   └── types.py      # LLMResponse / ToolCall / Usage DTOs
+├── registry.py       # Tool registry
 ├── session_manager.py # Session persistence management
 ├── todo_manager.py # Todo state management
 ├── server.py      # FastAPI server

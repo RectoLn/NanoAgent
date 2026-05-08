@@ -9,12 +9,15 @@ NanoAgent 是一个基于 ReAct 模式的轻量级 AI Agent 实现，采用 Fast
 ```
 app/
 ├── agent.py              # Tool Call 主循环实现
-├── client.py             # LLM 客户端（OpenAI 兼容接口）
+├── llm/                  # LLM Client 封装层
+│   ├── client.py         # OpenAI-compatible adapter
+│   ├── provider_config.py # 从 config.yaml + .env 解析 provider 配置
+│   └── types.py          # LLMResponse / ToolCall / Usage DTO
 ├── registry.py           # 工具注册表（自动扫描 tools/ 目录）
 ├── session_manager.py    # 会话持久化管理（文件夹存储）
 ├── todo_manager.py       # 全局 Todo 状态管理（单例）
 ├── server.py             # FastAPI 服务端点
-├── config.yaml           # 配置参数（max_steps, temperature 等）
+├── config.yaml           # 配置参数（provider presets, max_steps, compression 等）
 ├── prompts/system.md     # 系统提示模板
 ├── channel/              # 消息平台接入层
 │   ├── __init__.py      # 包初始化
@@ -53,7 +56,7 @@ app/
 
 ### ✅ 核心功能
 - **Tool Call 循环**：基于 OpenAI Tool Call 协议的原生工具调用
-- **多模型支持**：DeepSeek (V3 Chat / R1 Reasoner)、Kilo (GPT-4o / Claude 3.5 等)
+- **Provider 化多模型支持**：DeepSeek、Kilo、Ollama、Custom provider presets 统一配置在 `config.yaml`
 - **工具系统**：@tool 装饰器自动注册，支持动态工具扩展
 - **Web UI**：FastAPI SSE 流式输出 + Vue 3 响应式前端
 - **实时流式**：逐 token 实时渲染，支持中断恢复
@@ -85,7 +88,7 @@ app/
 - **环境配置**：.env 文件配置 API Key，支持多提供商
 
 ### ✅ Telegram Bot 接入
-- **Long Polling**：服务启动即自动开始拉取消息，无需 ngrok 或公网地址
+- **Long Polling**：`TELEGRAM_POLLING_ENABLED=true` 时服务启动即自动拉取消息，无需 ngrok 或公网地址
 - **显式开关**：`TELEGRAM_POLLING_ENABLED=true` 才会启动 polling，防止多实例共享 token 时意外抢占
 - **Webhook 备用**：`POST /webhook/telegram` 路由保留，可随时切换
 - **独立会话**：每个 Telegram 用户独立 session（session_id = `tg_{chat_id}`）
@@ -111,9 +114,17 @@ app/
 ### ✅ 上下文压缩稳定性
 - **三层压缩策略**：Layer 1 压缩旧 tool 结果，Layer 2 生成 LLM 摘要，Layer 3 在异常时本地兜底
 - **摘要重试机制**：记录 `summary_finish_reason`，遇到 `length` 截断或半截 JSON 自动使用更大 `retry_max_tokens` 重试
+- **独立摘要模型**：`SUMMARY_LLM_*` 可单独配置摘要 provider/model，例如 Docker 内访问宿主机 Ollama
 - **兜底摘要增强**：LLM 摘要失败时继承既有 `[上下文摘要]`，避免多次压缩后丢失核心任务进展
 - **状态去重与裁剪**：`Authoritative Session State` 对近似重复约束做归一化合并，observations 保留最近 80 条
 - **压缩审计字段**：`compression_history` 记录 fallback、错误原因、重试状态、输入字符数和估算 token
+
+### ✅ LLM Client 封装层
+- **DTO 边界**：Agent 层只依赖 `LLMResponse / ToolCall / Usage`，不再直接访问 OpenAI SDK 原始对象
+- **统一 adapter**：`app/llm/client.py` 作为 OpenAI-compatible adapter，兼容 DeepSeek / Kilo / Ollama / Custom
+- **Provider presets 外置**：`app/config.yaml` 的 `providers:` 块定义 base_url、default_model、api_key_env，新增 provider 无需改 Python 代码
+- **前端 provider 一级选择**：Web UI 从 `/meta` 获取 provider 列表，选择结果存入 localStorage；默认使用 provider 的 `default_model`
+- **摘要模型隔离**：`LLMClient(purpose="summary")` 优先读取 `SUMMARY_LLM_*`，不受前端聊天 provider 选择影响
 
 ## 待实现功能
 
@@ -211,17 +222,23 @@ app/
 ### 📊 重要变量
 
 #### 环境变量 (.env)
-- `LLM_API_KEY`: Kilo API Key
-- `LLM_BASE_URL`: Kilo Gateway URL
-- `LLM_MODEL_ID`: 默认模型 ID
-- `DEEPSEEK_API_KEY`: DeepSeek API Key
+- `LLM_PROVIDER`: 默认聊天 provider（deepseek / kilo / ollama / custom）
+- `LLM_MODEL_ID`: 可选聊天模型覆盖；留空使用 `config.yaml` 中 provider 的 `default_model`
+- `LLM_API_KEY`: 通用 OpenAI-compatible API key fallback
+- `LLM_BASE_URL`: 可选 OpenAI-compatible endpoint 显式覆盖
+- `DEEPSEEK_API_KEY`: DeepSeek provider API Key
+- `KILO_API_KEY`: Kilo provider API Key
+- `SUMMARY_LLM_PROVIDER`: 可选摘要 provider；留空复用默认聊天 provider
+- `SUMMARY_LLM_API_KEY`: 可选摘要 API Key
+- `SUMMARY_LLM_BASE_URL`: 可选摘要 endpoint 覆盖，常用于 Docker 访问本地 Ollama
+- `SUMMARY_LLM_MODEL_ID`: 可选摘要模型覆盖
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot Token（由 @BotFather 获取，可选）
 - `TELEGRAM_POLLING_ENABLED`: 设为 `true` 才启动 Long Polling（默认 false，防多实例抢占）
 
 #### 全局状态
 - `SESSION_MGR`: SessionManager 单例
 - `TASK_MGR`: TaskManager 单例 (task_manager.py)
-- `TODO`: TodoManager 单例 (todo_manager.py)
+- `TodoManager`: 每个 Agent/session 独立持有的任务状态管理器 (todo_manager.py)
 - `TOOLS_SCHEMA`: 工具描述列表 (registry.py)
 
 #### 前端状态 (static/index.html)
@@ -231,12 +248,31 @@ app/
 - `currentSessionId`: 当前会话 ID
 - `currentTaskId`: 当前任务 ID
 - `currentEventSource`: 当前活跃的 EventSource
+- `selectedProvider`: 当前聊天 provider，下拉框选择后写入 localStorage
 
 ### 🛠️ 配置参数 (config.yaml)
 ```yaml
+default:
+  provider: deepseek
+
+providers:
+  deepseek:
+    base_url: https://api.deepseek.com
+    default_model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+  kilo:
+    base_url: https://api.kilo.ai/api/gateway
+    default_model: kilo-auto/free
+    api_key_env: KILO_API_KEY
+  ollama:
+    base_url: http://host.docker.internal:11434/v1
+    default_model: qwen2.5:7b
+    api_key_env: null
+
 agent:
-  max_steps: 30          # 最大推理步骤
+  max_steps: 200         # 最大推理步骤
   temperature: 0.1       # LLM 温度参数
+  max_tokens: 16384      # 单次 LLM 调用最大输出 token
 
 prompts:
   system: prompts/system.md  # 系统提示文件路径
@@ -261,6 +297,18 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.8.1 (2026-05-08)
+
+**LLM Client 封装层与 Provider 配置重构**
+- 新增 `app/llm/` 封装层：`client.py`、`provider_config.py`、`types.py`，Agent 层改用 `LLMResponse / ToolCall / Usage` DTO，不再依赖 OpenAI SDK 原始 choice/message 对象。
+- 删除旧 `app/client.py`，统一通过 `LLMClient` 调用 OpenAI-compatible API。
+- `config.yaml` 新增 `providers:` 块，公开配置 DeepSeek / Kilo / Ollama / Custom 的 `base_url`、`default_model`、`api_key_env`；新增 provider 不再需要改 Python 代码。
+- `.env` 职责收敛为 provider 选择和 secret：`LLM_PROVIDER`、`KILO_API_KEY`、`DEEPSEEK_API_KEY`，`LLM_BASE_URL` / `LLM_MODEL_ID` 只作为显式覆盖使用。
+- 前端模型切换收敛为一级 provider 选择：从 `/meta` 获取 provider 列表，选择结果写入 `localStorage.selectedProvider`，发送请求时只传 provider，后端使用该 provider 的 `default_model`。
+- 摘要模型独立：`auto_compact()` 使用 `LLMClient(purpose="summary")`，优先读取 `SUMMARY_LLM_*`，可将摘要任务路由到本地 Ollama。
+- 已验证本地 Ollama summary：容器内通过 `SUMMARY_LLM_BASE_URL=http://172.17.0.1:11434/v1` 调用 `qwen2.5:7b` 成功返回摘要响应。
+- 更新 `tests/test_state_flow.py`：测试 FakeLLM 改为新 DTO，并 mock summary client，状态流与压缩测试继续通过。
 
 ### v0.8 (2026-04-27)
 
@@ -395,7 +443,7 @@ def execute_tool_call(name, args_json):
 
 **死代码清理**
 - `registry.py`：删除旧 ReAct 文本模式遗留的 `TOOLS` 字典、`execute()`、`get_tool_names()`、`get_tool_descriptions()`；`@tool` 装饰器改为 noop 保持工具文件不变
-- `client.py`：删除未使用的 `one_chat()` 和 `think()` 旧接口方法
+- 旧 `app/client.py`：删除未使用的 `one_chat()` 和 `think()` 旧接口方法
 - `agent.py`：删除 `ReActAgent = ToolCallAgent` 别名行
 - `server.py`：删除 `GET /todo` 死端点、重复的 `# 对话端点` 注释、函数内 `import time` 局部导入
 - `index.html`：删除 `deleteSession` 中的空 `else` 块
@@ -440,4 +488,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-04-29*
+*最后更新: 2026-05-08*

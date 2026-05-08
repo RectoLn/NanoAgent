@@ -35,8 +35,6 @@ CONSTRAINT_PATTERNS = (
     "基于",
     "来源",
     "真实",
-    "PDF",
-    "pdf",
 )
 
 INVALIDATION_PATTERNS = (
@@ -91,9 +89,6 @@ def _dedupe_key(value: Any) -> str:
         ("必须遵循", "遵循"),
         ("必须使用", "使用"),
         ("严格使用", "使用"),
-        ("而非其他pptskill", ""),
-        ("为林子越简历pdf生成幻灯片", "生成幻灯片"),
-        ("为林子越简历.pdf生成幻灯片", "生成幻灯片"),
     )
     for old, new in replacements:
         text = text.replace(old, new)

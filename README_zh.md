@@ -7,7 +7,7 @@
 ## 功能特性
 
 - **Tool Call 循环**：基于 OpenAI Tool Call 协议的原生工具调用
-- **多模型支持**：DeepSeek (Chat/Reasoner)、Kilo (GPT-4o、Claude 等)
+- **Provider 化 LLM 支持**：OpenAI-compatible provider 在 `app/config.yaml` 中配置（DeepSeek、Kilo、Ollama、Custom）
 - **工具系统**：基于 `@tool` 装饰器自动注册
 - **ClawHub Skill 技能系统**：内置 `install_skill` 工具，支持从 ClawHub 自动安装技能
 - **任务管理**：多步骤任务规划与状态跟踪
@@ -17,6 +17,7 @@
 - **Telegram Bot**：基于 Long Polling 的消息平台集成（无需公网地址），在 Telegram 中直接与 Agent 对话
 - **上下文压缩**：自动压缩长对话历史为智能摘要，防止 token 溢出，压缩记录内置存储于会话文件
 - **上下文压缩锚点**：压缩后保留 system prompt、初始用户输入、最新用户输入，以及当前权威 Todo/任务状态。
+- **独立摘要模型**：上下文摘要可通过 `SUMMARY_LLM_*` 单独配置，例如使用本地 Ollama，不受前端聊天 provider 影响。
 - **摘要可靠性兜底**：记录 LLM 摘要 finish_reason，遇到截断摘要自动重试，本地兜底会继承既有摘要，避免越压越丢信息。
 - **展示历史 / 模型上下文分离**：刷新页面展示完整历史，对大模型发送的上下文单独压缩。
 - **Token 统计持久化**：回答卡片保存本轮 usage，刷新或切换会话后仍可恢复；会话列表区分当前上下文窗口占用和会话累计消耗。
@@ -67,11 +68,18 @@ http://localhost:9090
 
 | 变量 | 说明 |
 |------|------|
-| `LLM_API_KEY` | Kilo API Key |
-| `LLM_BASE_URL` | Kilo Gateway URL |
-| `LLM_MODEL_ID` | 模型 ID（如 `kilo-auto/free`） |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key（可选） |
+| `LLM_PROVIDER` | 默认聊天 provider（`deepseek` / `kilo` / `ollama` / `custom`） |
+| `LLM_MODEL_ID` | 可选的聊天模型覆盖；留空使用 `app/config.yaml` 中的 provider preset |
+| `LLM_API_KEY` | 通用 OpenAI-compatible API key fallback |
+| `LLM_BASE_URL` | 可选的 OpenAI-compatible endpoint 显式覆盖 |
+| `DEEPSEEK_API_KEY` | DeepSeek provider API Key |
+| `KILO_API_KEY` | Kilo provider API Key |
+| `SUMMARY_LLM_PROVIDER` | 可选摘要 provider；留空复用默认聊天 provider |
+| `SUMMARY_LLM_API_KEY` | 可选摘要 API Key |
+| `SUMMARY_LLM_BASE_URL` | 可选摘要 endpoint 覆盖，常用于 Docker 访问本地 Ollama |
+| `SUMMARY_LLM_MODEL_ID` | 可选摘要模型覆盖 |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（由 @BotFather 创建） |
+| `TELEGRAM_POLLING_ENABLED` | 设为 `true` 才启动 Telegram Long Polling |
 
 ## 配置选项
 
@@ -79,21 +87,45 @@ Agent 行为可以通过 `app/config.yaml` 自定义：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
+| `default.provider` | 首次加载时使用的默认聊天 provider | deepseek |
+| `providers.<name>.base_url` | provider 的 OpenAI-compatible endpoint preset | 视 provider 而定 |
+| `providers.<name>.default_model` | 未覆盖模型时使用的 provider 默认模型 | 视 provider 而定 |
+| `providers.<name>.api_key_env` | 该 provider 对应的 API key 环境变量名 | 视 provider 而定 |
 | `agent.max_steps` | 每次查询的最大推理步骤 | 200 |
 | `agent.temperature` | LLM 温度参数（创造性 vs 一致性） | 0.1 |
 | `agent.max_tokens` | 每次 LLM 调用的最大输出 token 数 | 16384 |
 | `agent.nag_threshold` | 未调用 todo 工具的连续轮数阈值（注入提醒） | 3 |
 | `compression.enabled` | 启用/禁用自动上下文压缩 | true |
 | `compression.layer1.keep_recent_tool_messages` | 保留最近 N 条完整 tool 结果 | 3 |
-| `compression.layer1.content_threshold` | 旧 tool 结果超过该字符数后压缩为摘要 | 800 |
-| `compression.layer2.token_threshold` | 估算 token 超过该值时触发 L2 摘要压缩 | 20000 |
-| `compression.layer2.message_threshold` | 消息数超过该值时触发 L2 摘要压缩 | 50 |
+| `compression.layer1.content_threshold` | 旧 tool 结果超过该字符数后压缩为摘要 | 200 |
+| `compression.layer2.token_threshold` | 估算 token 超过该值时触发 L2 摘要压缩 | 5000 |
+| `compression.layer2.message_threshold` | 消息数超过该值时触发 L2 摘要压缩 | 100 |
 | `compression.layer2.summary.max_tokens` | 摘要模型常规输出预算 | 1200 |
 | `compression.layer2.summary.retry_max_tokens` | 摘要被截断时的重试输出预算 | 2400 |
 | `compression.layer2.summary.max_chars` | 解析后写入上下文的摘要字符上限 | 1200 |
 
 **config.yaml 示例：**
 ```yaml
+default:
+  provider: "deepseek"
+
+providers:
+  deepseek:
+    label: "DeepSeek"
+    base_url: "https://api.deepseek.com"
+    default_model: "deepseek-chat"
+    api_key_env: "DEEPSEEK_API_KEY"
+  kilo:
+    label: "Kilo"
+    base_url: "https://api.kilo.ai/api/gateway"
+    default_model: "kilo-auto/free"
+    api_key_env: "KILO_API_KEY"
+  ollama:
+    label: "Ollama"
+    base_url: "http://host.docker.internal:11434/v1"
+    default_model: "qwen2.5:7b"
+    api_key_env: null
+
 agent:
   max_steps: 200
   temperature: 0.1
@@ -104,10 +136,10 @@ compression:
   enabled: true
   layer1:
     keep_recent_tool_messages: 3
-    content_threshold: 800
+    content_threshold: 200
   layer2:
-    token_threshold: 20000
-    message_threshold: 50
+    token_threshold: 5000
+    message_threshold: 100
     summary:
       temperature: 0.1
       max_tokens: 1200
@@ -125,10 +157,11 @@ NanoAgent 通过 **Long Polling** 支持 Telegram 集成，无需公网 IP 或 n
 2. 在 `.env` 中添加：
    ```env
    TELEGRAM_BOT_TOKEN=你的token
+   TELEGRAM_POLLING_ENABLED=true
    ```
 3. 重启服务（Docker 或本地运行）
 
-Bot 会自动开始轮询消息。每个 Telegram 用户享受独立会话（`tg_<chat_id>`），支持多轮对话。
+当 `TELEGRAM_POLLING_ENABLED=true` 时，Bot 会开始轮询消息。每个 Telegram 用户享受独立会话（`tg_<chat_id>`），支持多轮对话。
 
 ### 使用方式
 
@@ -142,23 +175,27 @@ Bot 会自动开始轮询消息。每个 Telegram 用户享受独立会话（`tg
 - 超长消息会自动分段（Telegram 单条消息上限 4096 字符）
 - 保留 `/webhook/telegram` 端点作为 Webhook 模式的后备方案（需 ngrok）
 
-## 可用模型
+## Provider
 
-| 提供商 | 模型 | 说明 |
-|--------|------|------|
-| DeepSeek | `deepseek-chat` | V3 对话模型 |
-| DeepSeek | `deepseek-reasoner` | R1 推理模型 |
-| Kilo | `kilo-auto/free` | 自动选择免费模型 |
-| Kilo | `anthropic/claude-3-5-sonnet` | Claude 3.5 |
-| Kilo | `openai/gpt-4o` | GPT-4o |
+Provider preset 统一放在 `app/config.yaml`。前端从 `/meta` 获取 provider 列表并渲染下拉框，用户选择会保存到 `localStorage`。选择 provider 后使用其 `default_model`；高级模型覆盖仍可通过 `LLM_MODEL_ID` 或 API 参数传入。
+
+| Provider | 默认模型 | 说明 |
+|----------|----------|------|
+| DeepSeek | `deepseek-chat` | 使用 `DEEPSEEK_API_KEY` |
+| Kilo | `kilo-auto/free` | 使用 `KILO_API_KEY` |
+| Ollama | `qwen2.5:7b` | 本地 OpenAI-compatible endpoint，无需 API Key |
+| Custom | 手动配置 | 通常使用 `LLM_API_KEY` 和 `LLM_BASE_URL` |
 
 ## 项目结构
 
 ```
 app/
 ├── agent.py          # Tool Call 循环实现
-├── client.py        # LLM 客户端（OpenAI 兼容）
-├── registry.py     # 工具注册表
+├── llm/              # LLM 客户端封装层
+│   ├── client.py     # OpenAI-compatible adapter
+│   ├── provider_config.py # 从 config.yaml + .env 解析 provider
+│   └── types.py      # LLMResponse / ToolCall / Usage DTO
+├── registry.py       # 工具注册表
 ├── session_manager.py # 会话持久化管理
 ├── todo_manager.py # Todo 状态管理
 ├── server.py      # FastAPI 服务
