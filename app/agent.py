@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.llm.client import LLMClient
 from app.llm.types import LLMResponse, ToolCall, Usage
-from registry import execute_tool_call, TOOLS_SCHEMA, set_thread_local_todo
+from app.prompt_loader import load_prompt, render_prompt
+from registry import TOOL_EXECUTORS, TOOLS_SCHEMA, execute_tool_call, set_thread_local_todo
 from session_manager import SESSION_MGR
 from session_state import (
     extract_state_from_message,
@@ -47,20 +48,28 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def _load_prompt(file_path: str) -> str:
-    full_path = Path(__file__).parent / file_path
-    with open(full_path, "r", encoding="utf-8") as f:
-        return f.read().strip()
-
-
 class ToolCallAgent:
     """Tool Call 模式 Agent"""
 
-    def __init__(self, llm: LLMClient, session_id: Optional[str] = None, session = None):
+    def __init__(
+        self,
+        llm: LLMClient,
+        session_id: Optional[str] = None,
+        session = None,
+        todo: TodoManager = None,
+        tools_override: dict = None,
+        system_prompt: str = None,
+    ):
         self.llm = llm
         self.config = _load_config()
         self.session_id = session_id
         self.session = session  # Session 对象引用，用于 compression_history
+        self.tools = tools_override if tools_override is not None else TOOL_EXECUTORS
+        self.tools_schema = [
+            schema for schema in TOOLS_SCHEMA
+            if (schema.get("function") or {}).get("name") in self.tools
+        ]
+        self.messages: List[Dict[str, Any]] = []
 
         agent_cfg = self.config.get("agent", {})
         self.max_steps = agent_cfg.get("max_steps", 30)
@@ -94,26 +103,17 @@ class ToolCallAgent:
         )
         self.l2_summary_max_chars = l2_summary.get("max_chars", 800)
         self.l2_summary_max_input_chars = l2_summary.get("max_input_chars", 24000)
-        # Prompt 硬编码（无需配置）
-        self.l2_prompt_template = (
-            "Compress the following conversation history into a structured summary.\n"
-            "Return ONLY a JSON object, no prose, no markdown fences, in exactly this shape:\n\n"
-            "{{\n"
-            '  "progress_summary": "concise bullet list of completed steps, key decisions, and current status",\n'
-            '  "file_knowledge": [\n'
-            '    {{"path": "file or url that was read", "conclusion": "key conclusion from reading it, max 100 chars"}}\n'
-            '  ],\n'
-            '  "state_patch": {{\n'
-            '    "constraints": ["explicit constraints or rules the user stated"],\n'
-            '    "facts": ["verified facts established during the conversation"],\n'
-            '    "invalidated_assumptions": ["assumptions that were explicitly corrected"]\n'
-            "  }}\n"
-            "}}\n\n"
-            "Only include a file in file_knowledge if the conversation contains a tool result "
-            "from reading that file AND a subsequent assistant message drawing a conclusion from it. "
-            "Do not invent conclusions.\n\n"
-            "{messages}"
+        self.l2_prompt_file = l2_summary.get("prompt", "compression_summary.md")
+        self.l2_prompt_template = load_prompt(self.l2_prompt_file)
+        self.l2_fallback_prompt_file = l2_summary.get(
+            "fallback_prompt",
+            "compression_summary_fallback.md",
         )
+        self.compaction_hint_file = l2_summary.get(
+            "subagent_hint_prompt",
+            "compression_subagent_hint.md",
+        )
+        self.compaction_hint = load_prompt(self.compaction_hint_file)
         # 总是保存 transcript（无需配置）
         self.l2_save_transcript = True
 
@@ -126,12 +126,31 @@ class ToolCallAgent:
 
         prompts_cfg = self.config.get("prompts", {})
         prompt_file = prompts_cfg.get("system", "prompts/system.md")
-        self.system_prompt = _load_prompt(prompt_file)
+        self.system_prompt = system_prompt if system_prompt is not None else load_prompt(prompt_file)
 
         # 每个 Agent 持有独立的 TodoManager 实例（而非全局单例）
-        self.todo = TodoManager()
+        self.todo = todo or TodoManager()
         if self.session and getattr(self.session, "tasks", None):
             self.todo.items = self.todo.dedupe_items([dict(item) for item in self.session.tasks])
+
+    def _execute_tool_call(self, tool_name: str, arguments_json: str) -> str:
+        if self.tools is TOOL_EXECUTORS:
+            return execute_tool_call(tool_name, arguments_json)
+
+        executor = self.tools.get(tool_name)
+        if not executor:
+            return f"错误：未知工具 '{tool_name}'，可用工具：{list(self.tools.keys())}"
+        try:
+            arguments = json.loads(arguments_json) if arguments_json.strip() else {}
+        except json.JSONDecodeError as e:
+            return f"错误：工具参数 JSON 解析失败: {e}"
+        try:
+            result = executor(**arguments)
+            return str(result)
+        except TypeError as e:
+            return f"错误：工具 '{tool_name}' 参数不匹配: {e}"
+        except Exception as e:
+            return f"错误：工具 '{tool_name}' 执行失败: {type(e).__name__}: {e}"
 
     # ── 上下文压缩：三层策略 ──────────────────────────────────────────────────
 
@@ -199,6 +218,8 @@ class ToolCallAgent:
 
         summary_content = f"{self.summary_prefix}{summary}"
         new_messages.append({"role": self.summary_role, "content": summary_content})
+        if self.compaction_hint:
+            new_messages.append({"role": "user", "content": self.compaction_hint})
 
         if not self.todo.is_empty():
             task_status = (
@@ -384,21 +405,9 @@ class ToolCallAgent:
                 + formatted[-tail_chars:]
             )
         if self.l2_prompt_template:
-            summary_prompt = self.l2_prompt_template.format(messages=formatted)
+            summary_prompt = render_prompt(self.l2_prompt_file, messages=formatted)
         else:
-            summary_prompt = (
-                "Compress the following conversation history. Return ONLY a JSON object, "
-                "with no prose and no markdown fences, in exactly this shape:\n"
-                "{\n"
-                '  "progress_summary": "...",\n'
-                '  "state_patch": {\n'
-                '    "constraints": ["..."],\n'
-                '    "facts": ["..."],\n'
-                '    "invalidated_assumptions": ["..."]\n'
-                "  }\n"
-                "}\n\n"
-                f"{formatted}"
-            )
+            summary_prompt = render_prompt(self.l2_fallback_prompt_file, messages=formatted)
 
         summary_prompt_chars = len(summary_prompt)
         summary_prompt_estimated_tokens = self.estimate_tokens([
@@ -616,6 +625,7 @@ class ToolCallAgent:
                 {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": question},
             ]
+        self.messages = messages
 
         # 记录本轮新增消息（不含历史），供 session 保存
         new_messages: List[Dict] = [{"role": "user", "content": question}]
@@ -631,6 +641,7 @@ class ToolCallAgent:
 
             # ── Layer 1：micro_compact 每次 LLM 调用前静默执行 ─────────────
             messages = self.micro_compact(messages)
+            self.messages = messages
 
             # ── Layer 2：token 或消息数超阈值时自动触发 auto_compact ─────────
             if self.comp_enabled:
@@ -647,6 +658,7 @@ class ToolCallAgent:
 
                 if token_count > self.l2_token_threshold or msg_count > self.l2_message_threshold:
                     messages = self.auto_compact(messages)
+                    self.messages = messages
                     # 重置精准计数（压缩后历史已变，旧值不再适用）
                     self.last_precise_prompt_tokens = None
                     yield {"type": "context_snapshot", "messages": messages}
@@ -663,7 +675,7 @@ class ToolCallAgent:
             llm_messages = self._inject_authoritative_state(messages)
             response = self.llm.call(
                 messages=llm_messages,
-                tools=TOOLS_SCHEMA,
+                tools=self.tools_schema,
                 tool_choice="auto",
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
@@ -729,6 +741,7 @@ class ToolCallAgent:
                     for tc in response.tool_calls
                 ]
             messages.append(msg_dict)
+            self.messages = messages
             new_messages.append(msg_dict)
 
             # ── 情况 1：模型决定停止，输出最终答案 ────────────────────
@@ -789,6 +802,7 @@ class ToolCallAgent:
                     if tool_name == "compact":
                         # 执行 auto_compact（与 Layer 2 完全相同的流程）
                         messages = self.auto_compact(messages)
+                        self.messages = messages
                         yield {"type": "context_snapshot", "messages": messages}
                         yield {"type": "compact", "content": "上下文已手动压缩"}
                         # compact 会重写上下文快照；其余工具让模型在下一轮重新决定。
@@ -796,7 +810,7 @@ class ToolCallAgent:
                         break
 
                     # 执行工具
-                    result = execute_tool_call(tool_name, args_json)
+                    result = self._execute_tool_call(tool_name, args_json)
                     print(f"[Tool] {tool_name} → {str(result)[:120]}")
 
                     # 推送 observation 事件
@@ -813,6 +827,7 @@ class ToolCallAgent:
                         "content": result,
                     }
                     messages.append(tool_msg)
+                    self.messages = messages
                     new_messages.append(tool_msg)
                     yield {"type": "message_delta", "message": tool_msg}
 

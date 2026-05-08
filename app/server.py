@@ -57,6 +57,7 @@ from app.llm.provider_config import (
     provider_options,
     resolve as resolve_llm_config,
 )
+from app.prompt_loader import render_prompt
 from agent import ToolCallAgent
 from session_manager import SESSION_MGR, Session
 from task_manager import TASK_MGR
@@ -139,9 +140,6 @@ class NewSessionRequest(BaseModel):
 def load_system_prompt() -> str:
     from tools.workspace import WORKSPACE_DIR
 
-    _app_dir = Path(__file__).parent
-    template = (_app_dir / "prompts" / "system.md").read_text(encoding="utf-8")
-
     soul_file = WORKSPACE_DIR / "wiki" / "SOUL.md"
     soul = (
         soul_file.read_text(encoding="utf-8") if soul_file.exists() else "名字：未设定"
@@ -152,7 +150,7 @@ def load_system_prompt() -> str:
         user_file.read_text(encoding="utf-8") if user_file.exists() else "暂无用户信息"
     )
 
-    return template.replace("{soul}", soul).replace("{user_memory}", user)
+    return render_prompt("system.md", soul=soul, user_memory=user)
 
 
 def _new_agent(provider: str = "", model_id: str = "", session: Optional[Session] = None) -> ToolCallAgent:

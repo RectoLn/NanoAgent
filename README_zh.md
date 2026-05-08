@@ -10,6 +10,8 @@
 - **Provider 化 LLM 支持**：OpenAI-compatible provider 在 `app/config.yaml` 中配置（DeepSeek、Kilo、Ollama、Custom）
 - **工具系统**：基于 `@tool` 装饰器自动注册
 - **ClawHub Skill 技能系统**：内置 `install_skill` 工具，支持从 ClawHub 自动安装技能
+- **子 Agent 派发**：内置 `run_subagent` 工具，将调研、分析、批处理、报告类任务隔离到子 Agent 执行
+- **Prompt 模板化**：system、压缩、兜底、子 Agent 相关 prompt 均独立存放为 Markdown 文件
 - **任务管理**：多步骤任务规划与状态跟踪
 - **会话持久化**：独立会话存储，自动保存到 JSON 文件
 - **Web UI**：FastAPI 后端 + Vue 3 前端，流式输出
@@ -19,8 +21,24 @@
 - **上下文压缩锚点**：压缩后保留 system prompt、初始用户输入、最新用户输入，以及当前权威 Todo/任务状态。
 - **独立摘要模型**：上下文摘要可通过 `SUMMARY_LLM_*` 单独配置，例如使用本地 Ollama，不受前端聊天 provider 影响。
 - **摘要可靠性兜底**：记录 LLM 摘要 finish_reason，遇到截断摘要自动重试，本地兜底会继承既有摘要，避免越压越丢信息。
+- **压缩后的子任务提示**：上下文压缩后保留短提示，提醒 Agent 将独立调研或批处理任务派发给子 Agent。
 - **展示历史 / 模型上下文分离**：刷新页面展示完整历史，对大模型发送的上下文单独压缩。
 - **Token 统计持久化**：回答卡片保存本轮 usage，刷新或切换会话后仍可恢复；会话列表区分当前上下文窗口占用和会话累计消耗。
+
+## 子 Agent 与 Prompt 模板
+
+NanoAgent 可以通过 `run_subagent` 工具派发独立子任务。子 Agent 使用独立 Todo 状态、精简系统提示，并拥有除递归调用 `run_subagent` 外的常规工具。子任务完成后，其完整消息历史会被丢弃，只向父 Agent 返回结构化摘要：结论、产出物路径、关键发现和未完成项。
+
+这个机制适合隔离容易污染主上下文的任务：调研、分析、爬取、批处理、报告生成，或将文件内容整理进 wiki。重要产出应写入 `workspace/wiki/...`，父 Agent 需要完整细节时再读取对应文件。
+
+Prompt 文本集中放在 `app/prompts/`，由 `app/prompt_loader.py` 加载，调整行为时不需要改 Agent 主循环：
+
+- `system.md`：主 Agent 系统提示
+- `subagent_system.md`：子 Agent 系统提示
+- `subagent_summary.md`：子任务摘要提示
+- `compression_summary.md`：常规 L2 上下文摘要提示
+- `compression_summary_fallback.md`：兜底摘要提示
+- `compression_subagent_hint.md`：压缩后插入的子任务派发提醒
 
 ## 上下文与 Token 统计
 
@@ -64,6 +82,8 @@ http://localhost:9090
 
 **注意**：确保 9090 端口可用。Docker Desktop 提供了完整的容器化环境，适合开发和部署。
 
+Docker Compose 已将 `host.docker.internal` 映射到宿主机，因此容器内可以通过 `http://host.docker.internal:11434/v1` 访问宿主机上的 Ollama。
+
 ## 环境变量
 
 | 变量 | 说明 |
@@ -98,8 +118,11 @@ Agent 行为可以通过 `app/config.yaml` 自定义：
 | `compression.enabled` | 启用/禁用自动上下文压缩 | true |
 | `compression.layer1.keep_recent_tool_messages` | 保留最近 N 条完整 tool 结果 | 3 |
 | `compression.layer1.content_threshold` | 旧 tool 结果超过该字符数后压缩为摘要 | 200 |
-| `compression.layer2.token_threshold` | 估算 token 超过该值时触发 L2 摘要压缩 | 5000 |
+| `compression.layer2.token_threshold` | 估算 token 超过该值时触发 L2 摘要压缩 | 50000 |
 | `compression.layer2.message_threshold` | 消息数超过该值时触发 L2 摘要压缩 | 100 |
+| `compression.layer2.summary.prompt` | 常规 L2 摘要 prompt 文件 | compression_summary.md |
+| `compression.layer2.summary.fallback_prompt` | 常规模板不可用时的兜底摘要 prompt 文件 | compression_summary_fallback.md |
+| `compression.layer2.summary.subagent_hint_prompt` | 压缩后插入的子任务派发提示文件 | compression_subagent_hint.md |
 | `compression.layer2.summary.max_tokens` | 摘要模型常规输出预算 | 1200 |
 | `compression.layer2.summary.retry_max_tokens` | 摘要被截断时的重试输出预算 | 2400 |
 | `compression.layer2.summary.max_chars` | 解析后写入上下文的摘要字符上限 | 1200 |
@@ -123,7 +146,7 @@ providers:
   ollama:
     label: "Ollama"
     base_url: "http://host.docker.internal:11434/v1"
-    default_model: "qwen2.5:7b"
+    default_model: "qwen3:8b"
     api_key_env: null
 
 agent:
@@ -138,9 +161,12 @@ compression:
     keep_recent_tool_messages: 3
     content_threshold: 200
   layer2:
-    token_threshold: 5000
+    token_threshold: 50000
     message_threshold: 100
     summary:
+      prompt: "compression_summary.md"
+      fallback_prompt: "compression_summary_fallback.md"
+      subagent_hint_prompt: "compression_subagent_hint.md"
       temperature: 0.1
       max_tokens: 1200
       retry_max_tokens: 2400
@@ -163,11 +189,7 @@ NanoAgent 通过 **Long Polling** 支持 Telegram 集成，无需公网 IP 或 n
 
 当 `TELEGRAM_POLLING_ENABLED=true` 时，Bot 会开始轮询消息。每个 Telegram 用户享受独立会话（`tg_<chat_id>`），支持多轮对话。
 
-### 使用方式
 
-- 在 Telegram 中向 Bot 发送任意文本消息
-- Bot 先回复 `⏳ 处理中...`
-- Agent 处理完成后返回最终答案
 
 ### 注意事项
 
@@ -183,7 +205,7 @@ Provider preset 统一放在 `app/config.yaml`。前端从 `/meta` 获取 provid
 |----------|----------|------|
 | DeepSeek | `deepseek-chat` | 使用 `DEEPSEEK_API_KEY` |
 | Kilo | `kilo-auto/free` | 使用 `KILO_API_KEY` |
-| Ollama | `qwen2.5:7b` | 本地 OpenAI-compatible endpoint，无需 API Key |
+| Ollama | `qwen3:8b` | 本地 OpenAI-compatible endpoint，无需 API Key |
 | Custom | 手动配置 | 通常使用 `LLM_API_KEY` 和 `LLM_BASE_URL` |
 
 ## 项目结构
@@ -191,6 +213,7 @@ Provider preset 统一放在 `app/config.yaml`。前端从 `/meta` 获取 provid
 ```
 app/
 ├── agent.py          # Tool Call 循环实现
+├── prompt_loader.py  # Markdown prompt 加载与渲染
 ├── llm/              # LLM 客户端封装层
 │   ├── client.py     # OpenAI-compatible adapter
 │   ├── provider_config.py # 从 config.yaml + .env 解析 provider
@@ -210,9 +233,15 @@ app/
 │   ├── web_fetch.py
 │   ├── summarize.py      # 上下文压缩工具
 │   ├── install_skill.py  # ClawHub Skill 安装
+│   ├── subagent.py       # 子 Agent 隔离派发
 │   └── todo.py
 ├── prompts/       # Prompt 模板
-│   └── system.md
+│   ├── system.md
+│   ├── subagent_system.md
+│   ├── subagent_summary.md
+│   ├── compression_summary.md
+│   ├── compression_summary_fallback.md
+│   └── compression_subagent_hint.md
 └── static/       # Vue 前端
     └── index.html
 ```

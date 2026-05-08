@@ -7,6 +7,8 @@ services:
       - ./.env:/app/.env      # 将宿主机的 .env 文件精准映射到容器的 /app/.env
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_PORT:-9090}:${APP_PORT:-9090}"   # 通过 .env 的 APP_PORT 控制
     restart: always

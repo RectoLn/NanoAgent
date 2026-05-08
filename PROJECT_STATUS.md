@@ -9,6 +9,7 @@ NanoAgent 是一个基于 ReAct 模式的轻量级 AI Agent 实现，采用 Fast
 ```
 app/
 ├── agent.py              # Tool Call 主循环实现
+├── prompt_loader.py      # Markdown prompt 加载与占位符渲染
 ├── llm/                  # LLM Client 封装层
 │   ├── client.py         # OpenAI-compatible adapter
 │   ├── provider_config.py # 从 config.yaml + .env 解析 provider 配置
@@ -18,7 +19,13 @@ app/
 ├── todo_manager.py       # 全局 Todo 状态管理（单例）
 ├── server.py             # FastAPI 服务端点
 ├── config.yaml           # 配置参数（provider presets, max_steps, compression 等）
-├── prompts/system.md     # 系统提示模板
+├── prompts/              # Prompt 模板
+│   ├── system.md         # 主 Agent 系统提示模板
+│   ├── subagent_system.md # 子 Agent 系统提示模板
+│   ├── subagent_summary.md # 子任务摘要模板
+│   ├── compression_summary.md # L2 摘要模板
+│   ├── compression_summary_fallback.md # 兜底摘要模板
+│   └── compression_subagent_hint.md # 压缩后子任务派发提示
 ├── channel/              # 消息平台接入层
 │   ├── __init__.py      # 包初始化
 │   └── telegram.py      # Telegram Bot API 封装
@@ -30,6 +37,7 @@ app/
 │   ├── write_file.py    # 文件写入
 │   ├── todo.py          # Todo 管理
 │   ├── summarize.py     # 上下文压缩工具（内部使用，非 LLM 可见）
+│   ├── subagent.py      # run_subagent 子任务隔离执行工具
 │   └── workspace.py     # 安全沙箱（safe_path 路径校验）
 ├── static/               # 前端资源
 │   └── index.html       # Vue 3 单页应用
@@ -58,6 +66,8 @@ app/
 - **Tool Call 循环**：基于 OpenAI Tool Call 协议的原生工具调用
 - **Provider 化多模型支持**：DeepSeek、Kilo、Ollama、Custom provider presets 统一配置在 `config.yaml`
 - **工具系统**：@tool 装饰器自动注册，支持动态工具扩展
+- **子 Agent 派发**：`run_subagent` 可将独立调研、分析、爬取、批处理、报告任务隔离到子 Agent 执行，完成后只把结构化摘要返回父 Agent
+- **Prompt 模板化**：主系统提示、压缩摘要、兜底摘要、子 Agent 系统提示和子任务摘要均拆分到 `app/prompts/*.md`
 - **Web UI**：FastAPI SSE 流式输出 + Vue 3 响应式前端
 - **实时流式**：逐 token 实时渲染，支持中断恢复
 
@@ -113,9 +123,11 @@ app/
 
 ### ✅ 上下文压缩稳定性
 - **三层压缩策略**：Layer 1 压缩旧 tool 结果，Layer 2 生成 LLM 摘要，Layer 3 在异常时本地兜底
+- **压缩 prompt 外置**：`compression.layer2.summary.prompt` / `fallback_prompt` / `subagent_hint_prompt` 可在配置中指定 Markdown 模板
 - **摘要重试机制**：记录 `summary_finish_reason`，遇到 `length` 截断或半截 JSON 自动使用更大 `retry_max_tokens` 重试
 - **独立摘要模型**：`SUMMARY_LLM_*` 可单独配置摘要 provider/model，例如 Docker 内访问宿主机 Ollama
 - **兜底摘要增强**：LLM 摘要失败时继承既有 `[上下文摘要]`，避免多次压缩后丢失核心任务进展
+- **压缩后行为保持**：压缩后的上下文会追加子任务派发提示，避免长任务压缩后忘记使用 `run_subagent` 隔离探索分支
 - **状态去重与裁剪**：`Authoritative Session State` 对近似重复约束做归一化合并，observations 保留最近 80 条
 - **压缩审计字段**：`compression_history` 记录 fallback、错误原因、重试状态、输入字符数和估算 token
 
@@ -145,8 +157,8 @@ app/
    - 🔄 待完善：concepts/entities 自动分类优化
 
 2. **Multi-agent** 
-   - 🔄 计划：实现多 Agent 协作架构
-   - 目标：Agent 间任务分配、通信和协调
+   - ✅ 已完成：`run_subagent` 子任务隔离执行，支持父 Agent 派发独立任务并接收结构化摘要
+   - 🔄 待完善：多 Agent 间长期状态共享、任务队列、并发调度和可观测性
 
 ### 🔄 长期愿景 (P2 - 高级特性)
 1. **上下文压缩** 
@@ -183,8 +195,13 @@ app/
 
 #### ToolCallAgent (agent.py)
 - `ToolCallAgent(llm)`: 初始化 Agent
+- `ToolCallAgent(..., todo, tools_override, system_prompt)`: 支持为子 Agent 注入独立 Todo、工具集合和系统提示
 - `run_iter(question, history=None)`: 核心 Tool Call 循环生成器
 - `run(question)`: 阻塞式执行
+
+#### Prompt Loader (prompt_loader.py)
+- `load_prompt(path)`: 从 `app/prompts/` 或显式 `prompts/...` 路径读取 Markdown prompt
+- `render_prompt(path, **values)`: 读取 prompt 并替换 `{name}` 占位符
 
 #### FastAPI 端点 (server.py)
 - `GET /`: 返回前端页面
@@ -215,6 +232,11 @@ app/
 - `start_polling(on_message)`: Long Polling 主循环，需 `TELEGRAM_POLLING_ENABLED=true` 才启动，`getUpdates(offset, timeout=30)` 长轮询
 - `_md_to_html(text)`: LLM CommonMark → Telegram HTML 转换（代码块、行内代码、粗体、斜体）
 - `_polling_enabled()`: 检测 `TELEGRAM_POLLING_ENABLED` 环境变量
+
+#### 子 Agent 工具 (tools/subagent.py)
+- `run_subagent(task, context="")`: 派发独立子任务，子 Agent 拥有除 `run_subagent` 外的常规工具，完成后返回结构化摘要
+- `_build_sub_tools()`: 构造子 Agent 工具集合，禁止递归子任务
+- `_summarize(llm, messages, task)`: 使用 `subagent_summary.md` 将子 Agent 历史压缩为父 Agent 可用摘要
 
 #### 前端公共函数 (static/index.html)
 - `attachStreamHandlers(es, opts)`: 统一绑定 SSE `onmessage`/`onerror`，`send` 和 `resumeTask` 共用
@@ -266,16 +288,26 @@ providers:
     api_key_env: KILO_API_KEY
   ollama:
     base_url: http://host.docker.internal:11434/v1
-    default_model: qwen2.5:7b
+    default_model: qwen3:8b
     api_key_env: null
 
 agent:
   max_steps: 200         # 最大推理步骤
   temperature: 0.1       # LLM 温度参数
   max_tokens: 16384      # 单次 LLM 调用最大输出 token
+  nag_threshold: 3       # 连续未调用 todo 工具时注入提醒
 
 prompts:
   system: prompts/system.md  # 系统提示文件路径
+
+compression:
+  layer2:
+    token_threshold: 50000
+    message_threshold: 100
+    summary:
+      prompt: compression_summary.md
+      fallback_prompt: compression_summary_fallback.md
+      subagent_hint_prompt: compression_subagent_hint.md
 ```
 
 ### 📝 工具注册模式 (registry.py)
@@ -297,6 +329,19 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.8.2 (2026-05-08)
+
+**子 Agent 派发与 Prompt 模板化**
+- 新增 `app/tools/subagent.py`：提供 `run_subagent(task, context)` 工具，用独立 `ToolCallAgent` 执行调研、分析、爬取、批处理、报告等独立子任务，隔离探索历史，完成后只返回结构化摘要。
+- `ToolCallAgent` 构造参数扩展：支持注入 `todo`、`tools_override`、`system_prompt`，子 Agent 可使用独立 Todo 状态和精简工具集，并禁止递归调用 `run_subagent`。
+- 新增 `app/prompt_loader.py`：统一加载并渲染 `app/prompts/*.md`，替代散落在代码里的 prompt 字符串。
+- 新增 prompt 文件：`subagent_system.md`、`subagent_summary.md`、`compression_summary.md`、`compression_summary_fallback.md`、`compression_subagent_hint.md`。
+- `app/prompts/system.md` 增加子任务派发规则：规划完成后判断独立调研/分析/整理/抓取/批处理/报告类步骤是否应使用 `run_subagent`。
+- 上下文压缩 L2 摘要 prompt 改为配置驱动：`compression.layer2.summary.prompt`、`fallback_prompt`、`subagent_hint_prompt`，压缩后追加短提示以保持子任务派发行为。
+- `app/config.yaml`：Ollama 默认模型更新为 `qwen3:8b`，L2 token 触发阈值更新为 `50000`，摘要 prompt 文件路径写入配置。
+- `docker-compose.yml` 增加 `extra_hosts: host.docker.internal:host-gateway`，容器内可稳定访问宿主机 Ollama。
+- README / README_zh / PROJECT_STATUS 同步更新子 Agent、Prompt 模板和配置说明。
 
 ### v0.8.1 (2026-05-08)
 

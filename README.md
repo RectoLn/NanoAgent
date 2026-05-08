@@ -10,6 +10,8 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Provider-Based LLM Support**: OpenAI-compatible providers configured in `app/config.yaml` (DeepSeek, Kilo, Ollama, custom)
 - **Tool System**: Auto-registered tools with `@tool` decorator
 - **ClawHub Skill System**: `install_skill` tool for automated skill installation from ClawHub
+- **Subagent Delegation**: `run_subagent` isolates research, analysis, batch processing, and report tasks in a child Agent
+- **Prompt Templates**: System, compression, fallback, and subagent prompts are stored as editable markdown files
 - **Todo Management**: Multi-step task planning and tracking
 - **Session Persistence**: Independent session storage with automatic saving to JSON files
 - **Web UI**: FastAPI backend + Vue 3 frontend with stream output
@@ -19,8 +21,24 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Context-Aware Compaction Anchors**: Compacted history preserves the system prompt, initial user request, latest user request, and authoritative task status
 - **Independent Summary Model**: Context summaries can use `SUMMARY_LLM_*` (for example local Ollama) independently from the chat provider
 - **Reliable Summary Fallback**: LLM summaries record finish reasons, retry on truncated output, and preserve prior summaries when falling back locally
+- **Compaction Follow-up Hint**: After context compaction, the Agent keeps a short reminder to delegate isolated research or batch work to subagents
 - **Split UI History / LLM Context**: Refresh shows the full display history while only the model-facing context is compacted
 - **Token Usage Tracking**: Per-answer token usage is persisted, while session lists show current context-window usage separately from lifetime token spend
+
+## Subagents and Prompts
+
+NanoAgent can delegate isolated work through the `run_subagent` tool. The child Agent runs with its own todo state, its own reduced system prompt, and all regular tools except recursive subagent calls. Its full message history is discarded after completion; the parent Agent receives a compact summary with the result, output paths, key findings, and unfinished items.
+
+This is intended for work that would otherwise pollute the main context: research, analysis, crawling, batch processing, report generation, or file-to-wiki extraction. Important outputs should be written to `workspace/wiki/...`, then the parent Agent can read the generated file when it needs the full detail.
+
+Prompt text is centralized under `app/prompts/` and loaded via `app/prompt_loader.py`, so behavior can be adjusted without editing the Agent loop:
+
+- `system.md`: main Agent system prompt
+- `subagent_system.md`: child Agent system prompt
+- `subagent_summary.md`: child-task summary prompt
+- `compression_summary.md`: normal L2 context summary prompt
+- `compression_summary_fallback.md`: fallback summary prompt
+- `compression_subagent_hint.md`: reminder inserted after context compaction
 
 ## Context and Token Handling
 
@@ -64,6 +82,8 @@ http://localhost:9090
 
 **Note**: Ensure port 9090 is available. Docker Desktop provides a complete containerized environment for development and deployment.
 
+Docker Compose also maps `host.docker.internal` to the Docker host, so Ollama running on the host can be reached from the container through `http://host.docker.internal:11434/v1`.
+
 ## Environment Variables
 
 | Variable | Description |
@@ -98,8 +118,11 @@ Agent behavior can be customized via `app/config.yaml`:
 | `compression.enabled` | Toggle automatic context compression | true |
 | `compression.layer1.keep_recent_tool_messages` | Keep the latest N tool results uncompressed | 3 |
 | `compression.layer1.content_threshold` | Compress older tool results above this character length | 200 |
-| `compression.layer2.token_threshold` | Trigger L2 summary compaction above this estimated token count | 5000 |
+| `compression.layer2.token_threshold` | Trigger L2 summary compaction above this estimated token count | 50000 |
 | `compression.layer2.message_threshold` | Trigger L2 summary compaction above this message count | 100 |
+| `compression.layer2.summary.prompt` | Prompt file for normal L2 summaries | compression_summary.md |
+| `compression.layer2.summary.fallback_prompt` | Prompt file used when the normal template is unavailable | compression_summary_fallback.md |
+| `compression.layer2.summary.subagent_hint_prompt` | Prompt file inserted after compaction to preserve delegation behavior | compression_subagent_hint.md |
 | `compression.layer2.summary.max_tokens` | Normal LLM summary output budget | 1200 |
 | `compression.layer2.summary.retry_max_tokens` | Retry budget when a summary is truncated | 2400 |
 | `compression.layer2.summary.max_chars` | Max stored summary characters after parsing | 1200 |
@@ -123,7 +146,7 @@ providers:
   ollama:
     label: "Ollama"
     base_url: "http://host.docker.internal:11434/v1"
-    default_model: "qwen2.5:7b"
+    default_model: "qwen3:8b"
     api_key_env: null
 
 agent:
@@ -138,9 +161,12 @@ compression:
     keep_recent_tool_messages: 3
     content_threshold: 200
   layer2:
-    token_threshold: 5000
+    token_threshold: 50000
     message_threshold: 100
     summary:
+      prompt: "compression_summary.md"
+      fallback_prompt: "compression_summary_fallback.md"
+      subagent_hint_prompt: "compression_subagent_hint.md"
       temperature: 0.1
       max_tokens: 1200
       retry_max_tokens: 2400
@@ -163,11 +189,6 @@ NanoAgent supports Telegram integration via **Long Polling**—no public IP or n
 
 When `TELEGRAM_POLLING_ENABLED=true`, the bot starts polling Telegram for messages. Each Telegram user gets an independent session (`tg_<chat_id>`), so multi-turn conversations work out of the box.
 
-### Usage
-
-- Open Telegram and send any text message to your bot
-- Bot replies with `⏳ 处理中...` immediately
-- Agent processes the request and sends back the final answer
 
 ### Notes
 
@@ -183,7 +204,7 @@ Provider presets live in `app/config.yaml`. The web UI renders the provider list
 |----------|---------------|-------|
 | DeepSeek | `deepseek-chat` | Uses `DEEPSEEK_API_KEY` |
 | Kilo | `kilo-auto/free` | Uses `KILO_API_KEY` |
-| Ollama | `qwen2.5:7b` | Local OpenAI-compatible endpoint; no API key required |
+| Ollama | `qwen3:8b` | Local OpenAI-compatible endpoint; no API key required |
 | Custom | configured manually | Uses `LLM_API_KEY` and usually `LLM_BASE_URL` |
 
 ## Architecture
@@ -191,6 +212,7 @@ Provider presets live in `app/config.yaml`. The web UI renders the provider list
 ```
 app/
 ├── agent.py          # Tool Call loop implementation
+├── prompt_loader.py  # Markdown prompt loader / renderer
 ├── llm/              # LLM client layer
 │   ├── client.py     # OpenAI-compatible adapter
 │   ├── provider_config.py # Provider resolver from config.yaml + .env
@@ -210,9 +232,15 @@ app/
 │   ├── web_fetch.py
 │   ├── summarize.py      # Context compression utilities
 │   ├── install_skill.py  # ClawHub Skill installation
+│   ├── subagent.py       # Isolated child-Agent delegation
 │   └── todo.py
 ├── prompts/       # Prompt templates
-│   └── system.md
+│   ├── system.md
+│   ├── subagent_system.md
+│   ├── subagent_summary.md
+│   ├── compression_summary.md
+│   ├── compression_summary_fallback.md
+│   └── compression_subagent_hint.md
 └── static/       # Vue frontend
     └── index.html
 ```

@@ -23,7 +23,7 @@ providers:
   ollama:
     label: "Ollama"
     base_url: "http://host.docker.internal:11434/v1"
-    default_model: "qwen2.5:7b"
+    default_model: "qwen3:8b"
     api_key_env: null
 
   custom:
@@ -70,11 +70,14 @@ compression:
     # 触发阈值（满足任一条件即触发）
     #   - 估算 token 数（词数 × 1.3）超过 token_threshold
     #   - 非 system 消息条数超过 message_threshold
-    token_threshold: 5000
+    token_threshold: 50000
     message_threshold: 100
 
     # 摘要生成参数
     summary:
+      prompt: "compression_summary.md"
+      fallback_prompt: "compression_summary_fallback.md"
+      subagent_hint_prompt: "compression_subagent_hint.md"
       temperature: 0.1
       max_tokens: 1200  # 摘要模型的常规输出预算
       retry_max_tokens: 2400  # 若因 length 被截断且内容为空，自动用更大预算重试一次
