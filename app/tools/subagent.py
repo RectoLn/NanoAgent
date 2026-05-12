@@ -54,6 +54,9 @@ def _emit_step(
     tool: str,
     input_preview: str,
     observation_preview: str,
+    sub_call_id: str = None,
+    phase: str = "tool_result",
+    running: bool = False,
     parent_call_id: str = None,
     task_id: str = None,
     task_title: str = None,
@@ -67,6 +70,34 @@ def _emit_step(
         "tool": tool,
         "input_preview": input_preview,
         "observation_preview": observation_preview,
+        "phase": phase,
+        "running": running,
+        "done": False,
+    }
+    if sub_call_id:
+        ev["sub_call_id"] = sub_call_id
+    if parent_call_id:
+        ev["parent_call_id"] = parent_call_id
+    if task_id:
+        ev["task_id"] = task_id
+    if task_title:
+        ev["task_title"] = task_title
+    event_queue.put(ev)
+
+
+def _emit_task_start(
+    event_queue: Optional["queue.Queue"],
+    call_id: str,
+    parent_call_id: str = None,
+    task_id: str = None,
+    task_title: str = None,
+) -> None:
+    if event_queue is None:
+        return
+    ev = {
+        "type": "subagent_step",
+        "call_id": call_id,
+        "phase": "task_start",
         "done": False,
     }
     if parent_call_id:
@@ -91,6 +122,7 @@ def _emit_done(
     ev = {
         "type": "subagent_step",
         "call_id": call_id,
+        "phase": "task_done",
         "done": True,
         "summary": summary,
     }
@@ -160,21 +192,41 @@ async def _run_subagent_async(
     for event in agent.run_iter(question):
         event_type = event.get("type")
         if event_type == "tool_call":
+            step += 1
+            sub_call_id = event.get("call_id")
             pending_tool[event.get("call_id")] = {
+                "step": step,
                 "tool": event.get("name", "unknown"),
                 "input_preview": event.get("input_preview", ""),
             }
-        elif event_type == "observation":
-            step += 1
-            tool_info = pending_tool.pop(event.get("call_id"), {})
-            observation = str(event.get("content", ""))
             _emit_step(
                 event_queue,
                 call_id,
                 step,
+                str(event.get("name", "unknown")),
+                str(event.get("input_preview", "")),
+                "",
+                sub_call_id=sub_call_id,
+                phase="tool_start",
+                running=True,
+                parent_call_id=parent_call_id,
+                task_id=task_id,
+                task_title=task_title,
+            )
+        elif event_type == "observation":
+            sub_call_id = event.get("call_id")
+            tool_info = pending_tool.pop(sub_call_id, {})
+            observation = str(event.get("content", ""))
+            _emit_step(
+                event_queue,
+                call_id,
+                int(tool_info.get("step") or step + 1),
                 str(tool_info.get("tool") or "unknown"),
                 str(tool_info.get("input_preview") or ""),
                 observation[:120] + ("…" if len(observation) > 120 else ""),
+                sub_call_id=sub_call_id,
+                phase="tool_result",
+                running=False,
                 parent_call_id=parent_call_id,
                 task_id=task_id,
                 task_title=task_title,
@@ -196,6 +248,13 @@ def _run_one_core(
     """Pure synchronous execution of one subagent. Returns summary string.
     Does NOT emit any done event. Timeout per subagent: _SUBAGENT_TIMEOUT."""
     result = {"value": ""}
+    _emit_task_start(
+        event_queue,
+        call_id,
+        parent_call_id=parent_call_id,
+        task_id=task_id,
+        task_title=task_title,
+    )
 
     def target() -> None:
         try:
@@ -283,11 +342,19 @@ def _run_batch(
 ) -> str:
     results: Dict[str, str] = {}
     futures_map: Dict = {}
+    task_by_id = {}
 
-    executor = ThreadPoolExecutor(max_workers=max_concurrency)
+    max_workers = max(1, int(max_concurrency or 1))
+
+    executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
         for t in tasks:
+            if not isinstance(t, dict):
+                t = {"id": str(len(task_by_id) + 1), "task": str(t)}
             tid = str(t.get("id", ""))
+            if not tid:
+                tid = str(len(task_by_id) + 1)
+            task_by_id[tid] = t
             child_call_id = f"{parent_call_id}/{tid}"
             future = executor.submit(
                 _run_one_core,
@@ -311,12 +378,11 @@ def _run_batch(
                 except Exception as e:
                     summary = _fallback_summary(f"子任务执行异常: {e}")
                 results[tid] = summary
+                task = task_by_id.get(tid, {})
                 _emit_done(
                     event_queue, f"{parent_call_id}/{tid}", summary,
                     parent_call_id=parent_call_id, task_id=tid,
-                    task_title=str(
-                        next((t.get("task", "") for t in tasks if t.get("id") == tid), tid)
-                    )[:120],
+                    task_title=str(task.get("task", tid))[:120],
                 )
         except TimeoutError:
             pass
@@ -325,17 +391,22 @@ def _run_batch(
             if tid not in results:
                 fallback = _fallback_summary(f"子任务未在 {batch_timeout}s 内完成")
                 results[tid] = fallback
+                task = task_by_id.get(tid, {})
                 _emit_done(
                     event_queue, f"{parent_call_id}/{tid}", fallback,
                     parent_call_id=parent_call_id, task_id=tid,
-                    task_title=str(
-                        next((t.get("task", "") for t in tasks if t.get("id") == tid), tid)
-                    )[:120],
+                    task_title=str(task.get("task", tid))[:120],
                 )
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            # Python 3.8 does not support cancel_futures.
+            executor.shutdown(wait=False)
 
-    return _format_batch_summary(tasks, results)
+    summary = _format_batch_summary(tasks, results)
+    _emit_done(event_queue, parent_call_id, summary)
+    return summary
 
 
 @tool(

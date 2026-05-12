@@ -185,6 +185,16 @@ def _exec_get_token_usage() -> str:
 """
 
 
+def _exec_subagent(task=None, context: str = "", max_concurrency: int = 3) -> str:
+    from tools.subagent import run_subagent
+
+    return run_subagent(
+        task=task,
+        context=context,
+        max_concurrency=max_concurrency,
+    )
+
+
 # 工具名 -> kwargs 执行函数
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "bash": _exec_bash,
@@ -201,17 +211,23 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "websearch": _exec_websearch,
     "install_skill": _exec_install_skill,
     "get_token_usage": _exec_get_token_usage,
+    "run_subagent": _exec_subagent,
 }
 
 
-def execute_tool_call(tool_name: str, arguments_json: str) -> str:
+def execute_tool_call(
+    tool_name: str,
+    arguments_json: str,
+    executors: Optional[Dict[str, Callable]] = None,
+) -> str:
     """
     Tool Call 模式的执行入口。
     arguments_json: tool_call.function.arguments（JSON 字符串）
     """
-    executor = TOOL_EXECUTORS.get(tool_name)
+    tool_executors = executors if executors is not None else TOOL_EXECUTORS
+    executor = tool_executors.get(tool_name)
     if not executor:
-        return f"错误：未知工具 '{tool_name}'，可用工具：{list(TOOL_EXECUTORS.keys())}"
+        return f"错误：未知工具 '{tool_name}'，可用工具：{list(tool_executors.keys())}"
     try:
         arguments = json.loads(arguments_json) if arguments_json.strip() else {}
     except json.JSONDecodeError as e:
@@ -517,6 +533,42 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_subagent",
+            "description": (
+                "派发子任务给独立 Agent 执行，隔离上下文避免污染父任务。"
+                "支持单任务（task 为字符串）或批量并发（task 为任务对象数组）。"
+                "批量模式下多个子 Agent 同时运行，max_concurrency 控制并发数。"
+                "子 Agent 拥有除 run_subagent 外的所有工具。"
+                "执行完成后消息历史丢弃，只返回结构化摘要。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": ["string", "array"],
+                        "description": (
+                            "单任务：任务描述字符串，需说明做什么、预期产出格式、产出物路径。"
+                            "批量任务：任务对象数组 [{id, task, context?}]。"
+                            "id 为任务标识，task 为描述，context 为可选背景。"
+                            "独立批处理场景（如分别处理多个视频/文章/文件）优先用数组。"
+                        ),
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "父任务必要背景，精简传递。批量模式在每个对象中单独指定。",
+                    },
+                    "max_concurrency": {
+                        "type": "integer",
+                        "description": "批量模式下的最大并发子 Agent 数，默认 3。仅在 task 为数组时生效。",
+                    },
+                },
+                "required": ["task"],
             },
         },
     },

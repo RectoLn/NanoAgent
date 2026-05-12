@@ -43,6 +43,7 @@ class Session:
         self.system_prompt = system_prompt
         self.messages: List[Dict[str, Any]] = []
         self.display_messages: List[Dict[str, Any]] = []
+        self.trace_events: List[Dict[str, Any]] = []
         self.tasks: List[Dict[str, Any]] = []
         # 上下文压缩历史，每条压缩操作追加一条记录
         self.compression_history: List[Dict[str, Any]] = []
@@ -76,6 +77,11 @@ class Session:
         for msg in messages:
             self.add_message(msg)
 
+    def add_trace_event(self, event: Dict[str, Any]) -> None:
+        """Persist non-LLM UI trace events such as subagent steps."""
+        self.trace_events.append(dict(event))
+        self.updated_at = datetime.now().isoformat()
+
     def replace_messages_from_llm(self, messages: List[Dict[str, Any]]) -> None:
         """
         用当前 LLM 上下文快照替换会话历史。
@@ -99,8 +105,52 @@ class Session:
         result = []
         if self.system_prompt:
             result.append({"role": "system", "content": self.system_prompt})
-        result.extend(self.messages)
+        result.extend(self._messages_with_complete_tool_calls())
         return result
+
+    def _messages_with_complete_tool_calls(self) -> List[Dict[str, Any]]:
+        """
+        Return messages safe for OpenAI-compatible chat APIs.
+
+        If a prior run was interrupted while a tool was still executing, the
+        persisted history may contain an assistant message with tool_calls but
+        not yet contain all corresponding tool messages. Sending that history
+        causes a 400. Keep complete tool-call groups and drop incomplete groups
+        plus orphan tool messages from the LLM context only; display history is
+        left untouched.
+        """
+        safe: List[Dict[str, Any]] = []
+        i = 0
+        while i < len(self.messages):
+            msg = self.messages[i]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                required = [
+                    tc.get("id")
+                    for tc in msg.get("tool_calls") or []
+                    if tc.get("id")
+                ]
+                required_set = set(required)
+                tool_msgs: List[Dict[str, Any]] = []
+                seen = set()
+                j = i + 1
+                while j < len(self.messages) and self.messages[j].get("role") == "tool":
+                    tool_msg = self.messages[j]
+                    tool_call_id = tool_msg.get("tool_call_id")
+                    if tool_call_id in required_set:
+                        seen.add(tool_call_id)
+                        tool_msgs.append(tool_msg)
+                    j += 1
+                if required_set and seen == required_set:
+                    safe.append(msg)
+                    safe.extend(tool_msgs)
+                i = j
+                continue
+            if msg.get("role") == "tool":
+                i += 1
+                continue
+            safe.append(msg)
+            i += 1
+        return safe
 
     def to_dict(self) -> Dict[str, Any]:
         """序列化为前端可用的字典。"""
@@ -120,6 +170,7 @@ class Session:
         return {
             **self.to_dict(),
             "messages": self.display_messages or self.messages,
+            "trace_events": self.trace_events,
             "tasks": self.tasks,
         }
 
@@ -253,6 +304,7 @@ class SessionManager:
             "system_prompt": s.system_prompt,
             "messages": s.messages,
             "display_messages": s.display_messages,
+            "trace_events": s.trace_events,
             "tasks": s.tasks,
             "state": normalize_state(s.state),
             "compression_history": s.compression_history,
@@ -284,6 +336,7 @@ class SessionManager:
                 s.updated_at = d.get("updated_at", datetime.now().isoformat())
                 s.messages = d.get("messages", [])
                 s.display_messages = d.get("display_messages", [])
+                s.trace_events = d.get("trace_events", [])
                 s.tasks = d.get("tasks", [])
                 # Persisted state is already the authoritative merged version.
                 s.state = normalize_state(d.get("state"))

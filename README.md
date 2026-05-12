@@ -1,4 +1,4 @@
-# NanoAgent v0.8
+# NanoAgent v0.9
 
 A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Telegram Bot integration, and ClawHub Skill system.
 
@@ -11,8 +11,9 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Tool System**: Tools are explicitly registered through `TOOL_EXECUTORS` and `TOOLS_SCHEMA` in `registry.py`
 - **Web Search Tool**: Built-in `websearch` uses Tavily Search API for recent information, news, finance, and domain-filtered research
 - **ClawHub Skill System**: `install_skill` tool for automated skill installation from ClawHub
-- **Subagent Delegation**: `run_subagent` isolates research, analysis, batch processing, and report tasks in a child Agent
-- **Subagent Visualization**: The web UI renders child-Agent cards with live step updates, status badges, and structured summaries
+- **Subagent Delegation**: `run_subagent` isolates research, analysis, batch processing, and report tasks in child Agents, including concurrent batch mode
+- **Subagent Visualization**: The web UI renders child-Agent cards; internal tool calls appear while running as compact one-line steps, then fold into structured summaries
+- **Subagent Refresh Recovery**: Running child-Agent cards keep updating after refresh, session switches, or temporary SSE disconnects by resuming the active task stream
 - **Prompt Templates**: System, compression, fallback, and subagent prompts are stored as editable markdown files
 - **Todo Management**: Multi-step task planning and tracking
 - **Session Persistence**: Independent session storage with automatic saving to JSON files
@@ -32,11 +33,15 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 
 NanoAgent can delegate isolated work through the `run_subagent` tool. The child Agent runs with its own todo state, its own reduced system prompt, and all regular tools except recursive subagent calls. Its full message history is discarded after completion; the parent Agent receives a compact summary with the result, output paths, key findings, and unfinished items.
 
+The `task` argument can be either a single task string or a task-object array like `[{id, task, context?}]`. Batch mode runs multiple child Agents concurrently according to `max_concurrency` and returns a combined result to the parent Agent.
+
 This is intended for work that would otherwise pollute the main context: research, analysis, crawling, batch processing, report generation, or file-to-wiki extraction. Important outputs should be written to `workspace/wiki/...`, then the parent Agent can read the generated file when it needs the full detail.
 
 Subagent model routing can be configured separately with `SUBAGENT_LLM_PROVIDER`, `SUBAGENT_LLM_API_KEY`, `SUBAGENT_LLM_BASE_URL`, and `SUBAGENT_LLM_MODEL_ID`. If none of these variables are set, the parent Agent passes its active provider/model into `run_subagent`, so child Agents follow the provider selected in the web UI.
 
-When a parent Agent calls `run_subagent`, the web UI shows a dedicated child-Agent card. It opens while running, streams completed internal tool steps into a compact Steps list, then folds down to the final structured summary when done. Historical sessions restore the summary card from the saved tool observation.
+When a parent Agent calls `run_subagent`, the web UI shows a dedicated child-Agent card. It opens while running and shows internal tool calls as soon as the child Agent starts them. Each internal tool call is rendered as a single compact row (tool name, argument preview, and running dot), so long observations do not stretch the page. When done, the card folds down to the final structured summary.
+
+Historical sessions restore both trace steps and the saved tool-observation summary. If the parent task is still running after refresh or a session switch, the session API returns the active task metadata and the UI reconnects to `/tasks/{task_id}/stream` using the last public `event_index`, so newly emitted child-Agent tool calls continue to update the restored card.
 
 Prompt text is centralized under `app/prompts/` and loaded via `app/prompt_loader.py`, so behavior can be adjusted without editing the Agent loop:
 
@@ -223,13 +228,15 @@ Provider presets live in `app/config.yaml`. The web UI renders the provider list
 
 ```
 app/
-├── agent.py          # Tool Call loop implementation
+├── agent.py          # Tool Call loop and SSE event orchestration
+├── compression.py    # CompressionMixin: L1/L2 compaction and summary fallback
+├── subagent_runner.py # Parent-side run_subagent thread/queue event forwarding
 ├── prompt_loader.py  # Markdown prompt loader / renderer
 ├── llm/              # LLM client layer
 │   ├── client.py     # OpenAI-compatible adapter
 │   ├── provider_config.py # Provider resolver from config.yaml + .env
 │   └── types.py      # LLMResponse / ToolCall / Usage DTOs
-├── registry.py       # Tool registry
+├── registry.py       # Tool registry, schemas, and dispatch helpers
 ├── session_manager.py # Session persistence management
 ├── todo_manager.py # Todo state management
 ├── server.py      # FastAPI server
@@ -243,7 +250,7 @@ app/
 │   ├── bash.py
 │   ├── web_fetch.py
 │   ├── websearch.py      # Tavily web search
-│   ├── summarize.py      # Context compression utilities
+│   ├── summarize.py      # Summary transcript formatting helper
 │   ├── install_skill.py  # ClawHub Skill installation
 │   ├── compact.py        # Manual context compaction trigger
 │   ├── current_time.py   # Current local time
@@ -270,17 +277,17 @@ app/
 | `web_fetch` | Fetches a URL and extracts readable text from HTML |
 | `websearch` | Uses Tavily Search API; supports `max_results`, `search_depth`, `topic`, `time_range`, include/exclude domains, and `include_answer` |
 | `todo_add` / `todo_update` / `todo_replan` | Tracks multi-step task state |
-| `run_subagent` | Delegates isolated research, analysis, batch processing, and report work to a child Agent |
+| `run_subagent` | Delegates isolated research, analysis, batch processing, and report work to child Agents; supports single-task and concurrent batch modes |
 | `install_skill` | Installs Skills from ClawHub or GitHub into `workspace/skills/` |
 | `compact` | Manually triggers context compaction |
 | `get_current_time` / `get_system_info` / `get_token_usage` | Reports runtime state |
 
 ## Testing
 
-Subagent behavior is covered by `tests/test_subagent_stability.py`, including child step event emission, parent SSE forwarding, and `SUBAGENT_LLM_*` precedence over inherited parent provider/model.
+State flow and subagent behavior are covered by `tests/test_state_flow.py` and `tests/test_subagent_stability.py`, including context compaction invariants, task/tool running events, parent SSE forwarding, refresh recovery, and `SUBAGENT_LLM_*` precedence over inherited parent provider/model.
 
 ```bash
-python3 -m unittest tests/test_subagent_stability.py
+python3 -m unittest tests/test_state_flow.py tests/test_subagent_stability.py
 ```
 
 ## License

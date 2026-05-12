@@ -366,6 +366,85 @@ html, body {
   font-family: inherit; font-size: 12.5px; color: #4b5563; line-height: 1.65;
 }
 
+/* 批量 subagent 容器 */
+.batch-container {
+  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;
+  margin: 8px 0;
+}
+.batch-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  background: #f5f5f5; border-bottom: 1px solid #e5e7eb; cursor: pointer;
+  user-select: none;
+}
+.batch-header .step-caret { transition: transform .18s; }
+.batch-container.expanded .step-caret { transform: rotate(90deg); }
+.batch-title { flex: 1; font-size: 13px; color: #4b5563; }
+.batch-title .tool { font-family: "SF Mono", Menlo, monospace; color: #111827; font-weight: 600; }
+.batch-meta { font-size: 11px; color: #9ca3af; }
+.batch-body { display: none; }
+.batch-container.expanded .batch-body { display: block; }
+.batch-summary { padding: 12px 14px; border-top: 1px solid #efefef; }
+
+/* 批量容器内的子 agent 卡片 */
+.batch-child-card {
+  background: #fff; border-bottom: 1px solid #f0f0f0;
+  padding: 0; overflow: hidden;
+}
+.batch-child-card:last-child { border-bottom: none; }
+.batch-child-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; cursor: pointer; user-select: none;
+  background: #fafafa;
+}
+.batch-child-card.expanded .batch-child-header { background: #fff; }
+.batch-child-header .step-caret { transition: transform .18s; }
+.batch-child-card.expanded .step-caret { transform: rotate(90deg); }
+.batch-child-status {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: #d1d5db;
+}
+.batch-child-status.running { background: #4b5563; animation: blink 1.4s ease-in-out infinite; }
+.batch-child-status.done { background: #10b981; }
+.batch-child-status.error { background: #ef4444; }
+.batch-child-title { flex: 1; min-width: 0; font-size: 12px; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-child-badge {
+  font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+  flex-shrink: 0;
+}
+.batch-child-badge.running { background: #f3f4f6; color: #4b5563; }
+.batch-child-badge.done { background: #ecfdf5; color: #059669; }
+.batch-child-badge.error { background: #fef2f2; color: #dc2626; }
+.batch-child-body { display: none; }
+.batch-child-card.expanded .batch-child-body { display: block; }
+.batch-child-block { padding: 9px 12px; }
+.batch-child-block + .batch-child-block { border-top: 1px solid #f5f5f5; }
+.batch-child-block .label {
+  font-size: 10px; color: #9ca3af; font-weight: 600;
+  letter-spacing: .6px; margin-bottom: 5px; text-transform: uppercase;
+}
+.batch-child-task {
+  font-size: 12px; color: #4b5563; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
+.batch-child-step {
+  display: flex; align-items: center; gap: 7px;
+  min-height: 24px; font-size: 11.5px; color: #4b5563;
+}
+.batch-child-step + .batch-child-step { border-top: 1px solid #f9f9f9; }
+.batch-child-step .subagent-step-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: #d1d5db;
+}
+.batch-child-step .subagent-step-tool { font-family: "SF Mono", Menlo, monospace; color: #1f2937; font-weight: 500; font-size: 11px; flex-shrink: 0; }
+.batch-child-step .subagent-step-input { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ca3af; font-size: 11px; }
+.batch-child-step.running .subagent-step-dot { background: #4b5563; animation: blink 1.4s ease-in-out infinite; }
+.batch-child-summary { font-size: 12px; color: #4b5563; line-height: 1.6; word-break: break-word; }
+.batch-child-summary p { margin: 3px 0; }
+.batch-child-summary p:first-child { margin-top: 0; }
+.batch-child-summary p:last-child { margin-bottom: 0; }
+.batch-child-summary ul,.batch-child-summary ol { padding-left: 16px; margin: 3px 0; }
+.batch-child-card.empty { opacity: .55; }
+
 /* ─── 最终答案 ───────────────────────────── */
 .bubble-final {
   padding: 16px 18px; border-radius: 11px;
@@ -658,6 +737,49 @@ html, body {
                 </div>
               </div>
             </div>
+            <div v-else-if="item.kind === 'batch_subagent'" :class="['batch-container', { expanded: item.expanded }]">
+              <div class="batch-header" @click="item.expanded = !item.expanded">
+                <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1 L7 5 L3 9 Z"/></svg>
+                <span class="step-num">#{{ item.step }}</span>
+                <span class="batch-title">
+                  <span class="tool">Sub Agents ({{ item.children.length }})</span>
+                  <span style="color:#9ca3af;"> · {{ item.task }}</span>
+                </span>
+                <span class="batch-meta">{{ item.doneCount || 0 }}/{{ item.children.length }}</span>
+              </div>
+              <div class="batch-body">
+                <div v-for="child in item.children" :key="child.task_id" :class="['batch-child-card', { expanded: child._expanded, empty: child.status === 'empty' }]">
+                  <div class="batch-child-header" @click="child._expanded = !child._expanded">
+                    <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1 L7 5 L3 9 Z"/></svg>
+                    <span :class="['batch-child-status', child.status || 'running']"></span>
+                    <span class="batch-child-title">{{ child.task_title || child.task_id }}</span>
+                    <span :class="['batch-child-badge', child.status || 'running']">{{ child.status === 'running' ? 'running' : child.status === 'done' ? 'done' : child.status === 'error' ? 'error' : child.status || 'pending' }}</span>
+                  </div>
+                  <div class="batch-child-body">
+                    <div class="batch-child-block">
+                      <div class="label">Task</div>
+                      <div class="batch-child-task">{{ child.task_title || child.task_id }}</div>
+                    </div>
+                    <div v-if="child.steps && child.steps.length" class="batch-child-block">
+                      <div class="label">Steps</div>
+                      <div v-for="st in child.steps" :key="st.id" :class="['batch-child-step', { running: st.running }]">
+                        <span class="subagent-step-dot"></span>
+                        <span class="subagent-step-tool">{{ st.name }}</span>
+                        <span class="subagent-step-input">{{ truncate(st.input, 70) }}</span>
+                      </div>
+                    </div>
+                    <div v-if="child.summary" class="batch-child-block">
+                      <div class="label">Result</div>
+                      <div class="batch-child-summary" v-html="renderSubagentSummary(child.summary)"></div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="item.summary" class="batch-summary">
+                  <div class="label" style="margin-bottom:6px;">Batch Result</div>
+                  <div v-html="renderSubagentSummary(item.summary)"></div>
+                </div>
+              </div>
+            </div>
             <div v-else-if="item.kind === 'subagent'" :class="['subagent-card', { running: item.running, expanded: item.expanded }]">
               <div class="subagent-header" @click="item.expanded = !item.expanded">
                 <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1 L7 5 L3 9 Z"/></svg>
@@ -812,6 +934,7 @@ createApp({
     const ctxLen        = ref('—');
     let turnCount = 0;
     let currentEventSource = null;
+    let reconnectTimer = null;
 
     // session_id -> { taskId, lastEventIndex } 映射
     const sessionTaskMap = reactive({});
@@ -893,10 +1016,14 @@ createApp({
                 const toolName = tc.function.name;
                 const argsText = tc.function.arguments || '';
                 const args = parseToolArguments(argsText);
-                const card = reactive(toolName === 'run_subagent'
-                  ? { kind:'subagent', step:stepNum, action:toolName, task:String(args.task || ''), input:argsText, summary:'', running:false, expanded:false, steps:[], call_id:tc.id }
-                  : { kind:'step', step:stepNum, action:toolName, input:argsText, observation:'', running:false, expanded:false, call_id:tc.id });
+                const isBatchSubagent = toolName === 'run_subagent' && Array.isArray(args.task);
+                const card = reactive(isBatchSubagent
+                  ? { kind:'batch_subagent', step:stepNum, action:toolName, task:`批量子任务 (${args.task.length} 个)`, input:argsText, summary:'', running:false, expanded:false, children:[], call_id:tc.id, doneCount:0 }
+                  : toolName === 'run_subagent'
+                    ? { kind:'subagent', step:stepNum, action:toolName, task:String(args.task || ''), input:argsText, summary:'', running:false, expanded:false, steps:[], call_id:tc.id }
+                    : { kind:'step', step:stepNum, action:toolName, input:argsText, observation:'', running:false, expanded:false, call_id:tc.id });
                 cardMap[tc.id] = card;
+                callCards[tc.id] = card;
                 timeline.push(card);
               }
             } else if (msg.content) {
@@ -904,9 +1031,12 @@ createApp({
             }
           } else if (msg.role === 'tool') {
             const c = cardMap[msg.tool_call_id];
-            if (c && c.kind === 'subagent') c.summary = msg.content;
+            if (c && (c.kind === 'subagent' || c.kind === 'batch_subagent')) c.summary = msg.content;
             else if (c) c.observation = msg.content;
           }
+        }
+        for (const ev of (data.trace_events || [])) {
+          applySubagentTrace(cardMap, ev);
         }
         turnCount = curTurn;
 
@@ -915,16 +1045,8 @@ createApp({
         const msgs = data.messages || [];
         const lastMsg = msgs[msgs.length - 1];
         const taskDone = lastMsg?.role === 'assistant' && lastMsg?.content;
-        const taskInfo = sessionTaskMap[sid] ||
-          (localStorage.getItem('task_map_' + sid) ?
-            (() => {
-              try {
-                return JSON.parse(localStorage.getItem('task_map_' + sid));
-              } catch {
-                return { taskId: localStorage.getItem('task_map_' + sid), lastEventIndex: 0 };
-              }
-            })() : null);
-        if (taskInfo && !taskDone) {
+        const taskInfo = getSessionTaskInfo(sid, data.active_task);
+        if (taskInfo && (!taskDone || data.active_task)) {
           currentTaskId.value = taskInfo.taskId;
 
           // 判断是否是刷新场景：
@@ -987,6 +1109,33 @@ createApp({
       const total = s.token_usage?.total_tokens || 0;
       return `Current context: ${formatTokens(context)} tokens\nTotal spent: ${formatTokens(total)} tokens`;
     };
+    const normalizeTaskInfo = (value) => {
+      if (!value) return null;
+      if (typeof value === 'string') {
+        return value ? { taskId: value, lastEventIndex: 0 } : null;
+      }
+      if (typeof value !== 'object') return null;
+      const taskId = value.taskId || value.task_id;
+      if (!taskId) return null;
+      const doneStates = new Set(['done', 'error', 'cancelled']);
+      if (value.status && doneStates.has(value.status)) return null;
+      return {
+        taskId,
+        lastEventIndex: Number(value.lastEventIndex || value.event_index || 0),
+        status: value.status || 'running',
+      };
+    };
+    const readStoredTaskInfo = (sid) => {
+      const stored = localStorage.getItem('task_map_' + sid);
+      if (!stored) return null;
+      try { return normalizeTaskInfo(JSON.parse(stored)); }
+      catch { return normalizeTaskInfo(stored); }
+    };
+    const getSessionTaskInfo = (sid, activeTask) => (
+      normalizeTaskInfo(activeTask) ||
+      normalizeTaskInfo(sessionTaskMap[sid]) ||
+      readStoredTaskInfo(sid)
+    );
     const escapeHtml = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const parseToolArguments = (s) => {
       try { return JSON.parse(s || '{}') || {}; }
@@ -1057,6 +1206,107 @@ createApp({
       scrollBottom();
       return card;
     };
+    const newBatchCard = (callId, task, taskCount) => {
+      stepCounter++;
+      const card = reactive({
+        kind:'batch_subagent',
+        step:stepCounter,
+        action:'run_subagent',
+        task:task || '',
+        input:'',
+        summary:'',
+        running:true,
+        expanded:true,
+        children:[],
+        call_id:callId,
+        doneCount:0,
+      });
+      callCards[callId] = card;
+      timeline.push(card);
+      scrollBottom();
+      return card;
+    };
+    const ensureBatchChild = (batchCard, ev) => {
+      const tid = ev.task_id || ev.call_id;
+      let child = batchCard.children.find(c => c.task_id === tid);
+      if (!child) {
+        child = reactive({
+          task_id: tid,
+          task_title: ev.task_title || tid,
+          status: 'running',
+          _expanded: true,
+          steps: [],
+          summary: '',
+        });
+        batchCard.children.push(child);
+      } else if (ev.task_title && (!child.task_title || child.task_title === child.task_id)) {
+        child.task_title = ev.task_title;
+      }
+      return child;
+    };
+    const upsertSubagentStep = (steps, ev) => {
+      const stepId = String(ev.sub_call_id || ev.step || `${ev.tool || 'tool'}-${steps.length}`);
+      let step = steps.find(s => s.id === stepId);
+      if (!step) {
+        step = reactive({
+          id: stepId,
+          step: ev.step || steps.length + 1,
+          name: ev.tool || 'tool',
+          input: ev.input_preview || '',
+          observation: '',
+          running: !!ev.running || ev.phase === 'tool_start',
+        });
+        steps.push(step);
+      }
+      if (ev.tool) step.name = ev.tool;
+      if (ev.input_preview) step.input = ev.input_preview;
+      if (ev.observation_preview) step.observation = ev.observation_preview;
+      if (ev.phase === 'tool_start') step.running = true;
+      if (ev.phase === 'tool_result' || ev.running === false) step.running = false;
+      return step;
+    };
+    const applySubagentTrace = (cards, ev) => {
+      if (!ev || ev.type !== 'subagent_step') return false;
+      if (ev.parent_call_id) {
+        const batchCard = cards[ev.parent_call_id];
+        if (!batchCard || batchCard.kind !== 'batch_subagent') return false;
+        const child = ensureBatchChild(batchCard, ev);
+        batchCard.expanded = true;
+        if (ev.done) {
+          child.status = 'done';
+          child.summary = ev.summary || child.summary;
+          child.steps.forEach(s => { s.running = false; });
+          batchCard.doneCount = batchCard.children.filter(c => c.status === 'done' || c.status === 'error').length;
+          if (batchCard.doneCount >= batchCard.children.length) batchCard.running = false;
+        } else if (ev.phase === 'task_start') {
+          child.status = 'running';
+          child._expanded = true;
+        } else {
+          child.status = 'running';
+          child._expanded = true;
+          upsertSubagentStep(child.steps, ev);
+        }
+        return true;
+      }
+
+      const card = cards[ev.call_id];
+      if (!card || card.kind !== 'subagent') return false;
+      if (ev.done) {
+        card.steps.forEach(s => { s.running = false; });
+        card.summary = ev.summary || card.summary;
+        card.running = false;
+        card.expanded = false;
+      } else if (ev.phase === 'task_start') {
+        card.running = true;
+        card.expanded = true;
+      } else {
+        if (ev.phase === 'tool_start') card.steps.forEach(s => { s.running = false; });
+        upsertSubagentStep(card.steps, ev);
+        card.running = true;
+        card.expanded = true;
+      }
+      return true;
+    };
     const finishSubagentStep = (card, subCallId) => {
       if (!card || !Array.isArray(card.steps)) return;
       const step = card.steps.find(s => s.id === subCallId) || [...card.steps].reverse().find(s => s.running);
@@ -1064,6 +1314,13 @@ createApp({
     };
     // 完成时折叠所有卡片（running 置 false + 折叠）
     const closeAllCards = () => Object.values(callCards).forEach(c => {
+      if (c.kind === 'batch_subagent') {
+        c.children.forEach(ch => {
+          ch.status = ch.status === 'running' ? 'done' : ch.status;
+          ch._expanded = false;
+          if (Array.isArray(ch.steps)) ch.steps.forEach(s => { s.running = false; });
+        });
+      }
       c.running = false;
       c.expanded = false;
       if (Array.isArray(c.steps)) c.steps.forEach(s => { s.running = false; });
@@ -1090,7 +1347,7 @@ createApp({
 
           // 更新 lastEventIndex（对于非 new_messages 事件）
           if (streamSid && sessionTaskMap[streamSid] && ev.type !== 'new_messages') {
-            sessionTaskMap[streamSid].lastEventIndex++;
+            sessionTaskMap[streamSid].lastEventIndex = Number(ev.event_index || (sessionTaskMap[streamSid].lastEventIndex + 1));
             localStorage.setItem('task_map_' + streamSid, JSON.stringify(sessionTaskMap[streamSid]));
           }
 
@@ -1115,19 +1372,27 @@ createApp({
               // 检查是否已经存在相同 call_id 的卡片，避免重复
               if (callCards[ev.call_id]) break;
               if (ev.name === 'run_subagent') {
-                newSubagentCard(ev.call_id, ev.task || '', ev.input_preview);
+                if (ev.batch) {
+                  newBatchCard(ev.call_id, ev.task || '', ev.task_count || 0);
+                } else {
+                  newSubagentCard(ev.call_id, ev.task || '', ev.input_preview);
+                }
               } else {
                 newCard(ev.call_id, ev.name, ev.input_preview);
               }
               break;
             case 'observation': {
               const card = callCards[ev.call_id];
-              if (card && card.kind === 'subagent') {
+              if (!card) break;
+              if (card.kind === 'batch_subagent') {
+                card.summary = ev.content;
+                card.running = false;
+              } else if (card.kind === 'subagent') {
                 finishSubagentStep(card);
                 card.summary = ev.content;
                 card.running = false;
                 card.expanded = false;
-              } else if (card) {
+              } else {
                 card.observation = ev.content;
                 card.running = false;
                 card.expanded = false;
@@ -1136,27 +1401,7 @@ createApp({
               break;
             }
             case 'subagent_step': {
-              const card = callCards[ev.call_id];
-              if (card && card.kind === 'subagent') {
-                if (ev.done) {
-                  card.steps.forEach(s => { s.running = false; });
-                  card.summary = ev.summary || card.summary;
-                  card.running = false;
-                  card.expanded = false;
-                } else {
-                  card.steps.forEach(s => { s.running = false; });
-                  const stepId = ev.step || `${ev.tool}-${card.steps.length}`;
-                  if (!card.steps.find(s => s.id === stepId)) {
-                    card.steps.push({
-                      id: stepId,
-                      name: ev.tool || 'tool',
-                      input: ev.input_preview || '',
-                      observation: ev.observation_preview || '',
-                      running: true,
-                    });
-                  }
-                }
-              }
+              applySubagentTrace(callCards, ev);
               scrollBottom();
               break;
             }
@@ -1249,6 +1494,23 @@ createApp({
          // 若 currentEventSource 已被 done 处理清空，说明正常结束后浏览器触发的多余 onerror，静默忽略
          if (currentEventSource !== es) return;
          currentEventSource.close(); currentEventSource = null;
+
+         const taskInfo = streamSid
+           ? (normalizeTaskInfo(sessionTaskMap[streamSid]) || readStoredTaskInfo(streamSid))
+           : null;
+         if (taskInfo?.taskId) {
+           if (streamSid) sessionLoading[streamSid] = true;
+           if (!reconnectTimer) {
+             reconnectTimer = setTimeout(() => {
+               reconnectTimer = null;
+               if (currentSessionId.value === streamSid) {
+                 resumeTask(streamSid, taskInfo.taskId, taskInfo.lastEventIndex || 0);
+               }
+             }, 800);
+           }
+           return;
+         }
+
          if (streamSid) sessionLoading[streamSid] = false;
          if (currentSessionId.value === streamSid) closeAllCards();
          if (e && e.target && e.target.status === 404) {
@@ -1289,6 +1551,18 @@ createApp({
         timeline.push({ kind: 'error', content: '停止请求发送失败' });
         scrollBottom();
       }
+    };
+
+    const reconnectCurrentTask = () => {
+      const sid = currentSessionId.value;
+      if (!sid || !sessionLoading[sid]) return;
+      const taskInfo = normalizeTaskInfo(sessionTaskMap[sid]) || readStoredTaskInfo(sid);
+      if (!taskInfo?.taskId) return;
+      if (currentEventSource) {
+        currentEventSource.close();
+        currentEventSource = null;
+      }
+      resumeTask(sid, taskInfo.taskId, taskInfo.lastEventIndex || 0);
     };
 
     // ── 发送 ──
@@ -1367,6 +1641,10 @@ createApp({
     };
 
     onMounted(async () => {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reconnectCurrentTask();
+      });
+
       // 恢复 session -> task 映射
       Object.keys(localStorage)
         .filter(k => k.startsWith('task_map_'))
@@ -1375,10 +1653,12 @@ createApp({
           const stored = localStorage.getItem(k);
           if (stored) {
             try {
-              sessionTaskMap[sid] = JSON.parse(stored);
+              const info = normalizeTaskInfo(JSON.parse(stored));
+              if (info) sessionTaskMap[sid] = info;
             } catch {
               // 兼容旧格式（纯字符串 taskId）
-              sessionTaskMap[sid] = { taskId: stored, lastEventIndex: 0 };
+              const info = normalizeTaskInfo(stored);
+              if (info) sessionTaskMap[sid] = info;
             }
           }
         });

@@ -1,4 +1,4 @@
-# NanoAgent v0.8
+# NanoAgent v0.9
 
 一个最小化的 ReAct Agent 实现，支持 LLM 调用、工具注册、Web UI、Telegram Bot 集成，以及 ClawHub Skill 技能系统。
 
@@ -11,8 +11,9 @@
 - **工具系统**：通过 `registry.py` 的 `TOOL_EXECUTORS` 和 `TOOLS_SCHEMA` 显式注册
 - **联网搜索工具**：内置 `websearch`，通过 Tavily Search API 查询最新资料、新闻、财经和域名过滤结果
 - **ClawHub Skill 技能系统**：内置 `install_skill` 工具，支持从 ClawHub 自动安装技能
-- **子 Agent 派发**：内置 `run_subagent` 工具，将调研、分析、批处理、报告类任务隔离到子 Agent 执行
-- **子 Agent 可视化**：Web UI 显示子 Agent 卡片、实时内部步骤、状态徽章和结构化摘要
+- **子 Agent 派发**：内置 `run_subagent` 工具，将调研、分析、批处理、报告类任务隔离到子 Agent 执行，支持批量并发
+- **子 Agent 可视化**：Web UI 显示子 Agent 卡片；运行中即可展开查看内部工具调用，工具步骤以单行缩略展示，完成后折叠为结构化摘要
+- **子 Agent 刷新恢复**：运行中的子 Agent 卡片在刷新、切换会话或 SSE 短暂断开后，会续接 active task 观察流并继续动态更新内部工具调用
 - **Prompt 模板化**：system、压缩、兜底、子 Agent 相关 prompt 均独立存放为 Markdown 文件
 - **任务管理**：多步骤任务规划与状态跟踪
 - **会话持久化**：独立会话存储，自动保存到 JSON 文件
@@ -32,11 +33,15 @@
 
 NanoAgent 可以通过 `run_subagent` 工具派发独立子任务。子 Agent 使用独立 Todo 状态、精简系统提示，并拥有除递归调用 `run_subagent` 外的常规工具。子任务完成后，其完整消息历史会被丢弃，只向父 Agent 返回结构化摘要：结论、产出物路径、关键发现和未完成项。
 
+`run_subagent` 的 `task` 参数既可以是单个字符串，也可以是任务对象数组 `[{id, task, context?}]`。批量模式会按 `max_concurrency` 并发运行多个子 Agent，并在父任务中汇总每个子任务的结果。
+
 这个机制适合隔离容易污染主上下文的任务：调研、分析、爬取、批处理、报告生成，或将文件内容整理进 wiki。重要产出应写入 `workspace/wiki/...`，父 Agent 需要完整细节时再读取对应文件。
 
 子 Agent 的模型路由可以通过 `SUBAGENT_LLM_PROVIDER`、`SUBAGENT_LLM_API_KEY`、`SUBAGENT_LLM_BASE_URL`、`SUBAGENT_LLM_MODEL_ID` 单独配置。若这些变量都未设置，父 Agent 会把当前使用的 provider/model 显式传给 `run_subagent`，因此子 Agent 会跟随 Web UI 中选择的 provider。
 
-父 Agent 调用 `run_subagent` 时，Web UI 会显示专门的子 Agent 卡片。运行中默认展开并展示内部工具步骤，完成后自动折叠为最终结构化摘要；历史会话可从保存的 tool observation 恢复摘要卡片。
+父 Agent 调用 `run_subagent` 时，Web UI 会显示专门的子 Agent 卡片。运行中默认展开，并在子 Agent 发起内部工具调用时立即显示步骤；每个内部工具调用只占一行缩略信息（工具名 + 参数摘要 + 运行状态点），避免长 observation 撑开页面。完成后卡片自动折叠为最终结构化摘要。
+
+历史会话可从保存的 trace 事件和 tool observation 恢复内部步骤与摘要卡片。如果父任务仍在运行，session API 会返回 active task 元数据，前端按最后收到的公开 `event_index` 重新连接 `/tasks/{task_id}/stream`，因此刷新或切换页面回来后，新的子 Agent 工具调用仍会追加到恢复出的卡片上。
 
 Prompt 文本集中放在 `app/prompts/`，由 `app/prompt_loader.py` 加载，调整行为时不需要改 Agent 主循环：
 
@@ -224,13 +229,15 @@ Provider preset 统一放在 `app/config.yaml`。前端从 `/meta` 获取 provid
 
 ```
 app/
-├── agent.py          # Tool Call 循环实现
+├── agent.py          # Tool Call 主循环与 SSE 事件编排
+├── compression.py    # CompressionMixin：L1/L2 压缩与兜底摘要
+├── subagent_runner.py # 父 Agent 侧 run_subagent 线程/队列事件转发
 ├── prompt_loader.py  # Markdown prompt 加载与渲染
 ├── llm/              # LLM 客户端封装层
 │   ├── client.py     # OpenAI-compatible adapter
 │   ├── provider_config.py # 从 config.yaml + .env 解析 provider
 │   └── types.py      # LLMResponse / ToolCall / Usage DTO
-├── registry.py       # 工具注册表
+├── registry.py       # 工具注册表、schema 与 dispatch 辅助
 ├── session_manager.py # 会话持久化管理
 ├── todo_manager.py # Todo 状态管理
 ├── server.py      # FastAPI 服务
@@ -244,7 +251,7 @@ app/
 │   ├── bash.py
 │   ├── web_fetch.py
 │   ├── websearch.py      # Tavily 联网搜索
-│   ├── summarize.py      # 上下文压缩工具
+│   ├── summarize.py      # 摘要 transcript 格式化辅助
 │   ├── install_skill.py  # ClawHub Skill 安装
 │   ├── compact.py        # 主动触发上下文压缩
 │   ├── current_time.py   # 当前时间
@@ -278,17 +285,17 @@ app/
 | `web_fetch` | 获取指定 URL 内容，HTML 自动提取文本 |
 | `websearch` | 使用 Tavily Search API 联网搜索，支持 `max_results`、`search_depth`、`topic`、`time_range`、域名 include/exclude、`include_answer` |
 | `todo_add` / `todo_update` / `todo_replan` | 管理多步骤任务状态 |
-| `run_subagent` | 将独立调研、分析、批处理、报告类任务交给子 Agent |
+| `run_subagent` | 将独立调研、分析、批处理、报告类任务交给子 Agent；支持单任务或批量并发 |
 | `install_skill` | 从 ClawHub 或 GitHub 安装 Skill 到 `workspace/skills/` |
 | `compact` | 主动触发上下文压缩 |
 | `get_current_time` / `get_system_info` / `get_token_usage` | 查询运行时状态 |
 
 ## 测试
 
-`tests/test_subagent_stability.py` 覆盖子 Agent 内部步骤事件、父 Agent SSE 转发，以及 `SUBAGENT_LLM_*` 优先于父 Agent provider/model 的配置逻辑。
+`tests/test_state_flow.py` 和 `tests/test_subagent_stability.py` 覆盖上下文压缩不变量、子 Agent task/tool 运行中事件、父 Agent SSE 转发、刷新恢复，以及 `SUBAGENT_LLM_*` 优先于父 Agent provider/model 的配置逻辑。
 
 ```bash
-python3 -m unittest tests/test_subagent_stability.py
+python3 -m unittest tests/test_state_flow.py tests/test_subagent_stability.py
 ```
 
 ## 许可证

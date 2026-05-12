@@ -201,6 +201,7 @@ def meta(provider: str = Query(""), model_id: str = Query("")):
 
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+_INTERNAL_TASK_EVENT_TYPES = {"new_messages", "message_delta", "context_snapshot"}
 
 
 def _sse_payload(event: dict) -> str:
@@ -211,17 +212,33 @@ def _poll_task_events(task_id: str, start_index: int = 0):
     """
     公共 SSE 生成器：从 start_index 开始轮询任务事件并推送给前端。
     跳过仅用于后台持久化的内部事件。
+    start_index 是“已推送给前端的公开事件数”，不是 TaskState.events 的
+    原始数组下标；原始数组里包含 message_delta/context_snapshot 等内部事件。
     客户端断开时（GeneratorExit）静默退出，后台任务继续运行。
     """
-    index = start_index
+    raw_index = 0
+    public_index = 0
+    sent_done = False
+    start_index = max(0, int(start_index or 0))
     try:
         while True:
-            for event in TASK_MGR.get_events_from_index(task_id, index):
-                index += 1
-                if event["type"] in ("new_messages", "message_delta", "context_snapshot"):
+            for event in TASK_MGR.get_events_from_index(task_id, raw_index):
+                raw_index += 1
+                if event["type"] in _INTERNAL_TASK_EVENT_TYPES:
                     continue
-                yield _sse_payload(event)
+                if public_index < start_index:
+                    public_index += 1
+                    continue
+                public_index += 1
+                payload = dict(event)
+                payload["event_index"] = public_index
+                if payload.get("type") == "done":
+                    sent_done = True
+                yield _sse_payload(payload)
             if TASK_MGR.is_task_done(task_id):
+                if not sent_done:
+                    public_index += 1
+                    yield _sse_payload({"type": "done", "event_index": public_index})
                 break
             time.sleep(0.05)
     except GeneratorExit:
@@ -251,7 +268,11 @@ def get_session(session_id: str = FPath(...)):
     session = SESSION_MGR.get(session_id)
     if not session:
         return JSONResponse({"error": "会话不存在"}, status_code=404)
-    return session.history_to_dict()
+    data = session.history_to_dict()
+    active_task = TASK_MGR.get_latest_task_for_session(session_id)
+    if active_task:
+        data["active_task"] = active_task
+    return data
 
 
 @app.delete("/sessions/{session_id}")
@@ -321,6 +342,9 @@ def chat(req: ChatRequest):
                 SESSION_MGR._save_session(session.session_id)
             elif event["type"] == "todo_update":
                 session.tasks = event["items"]
+                SESSION_MGR._save_session(session.session_id)
+            elif event["type"] in {"subagent_step", "subagent_step_done", "subagent_error"}:
+                session.add_trace_event(event)
                 SESSION_MGR._save_session(session.session_id)
     except Exception as e:
         return JSONResponse({"error": f"Agent 执行失败: {e}"}, status_code=500)

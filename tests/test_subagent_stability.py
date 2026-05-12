@@ -147,17 +147,32 @@ class SubagentStabilityTest(unittest.TestCase):
                 while not events.empty():
                     drained.append(events.get_nowait())
 
-                step_events = [ev for ev in drained if not ev.get("done")]
+                task_start_events = [
+                    ev for ev in drained
+                    if ev.get("phase") == "task_start"
+                ]
+                tool_start_events = [
+                    ev for ev in drained
+                    if ev.get("phase") == "tool_start"
+                ]
+                tool_result_events = [
+                    ev for ev in drained
+                    if ev.get("phase") == "tool_result"
+                ]
                 done_events = [ev for ev in drained if ev.get("done")]
                 ok = (
                     "## 结论" in summary
-                    and len(step_events) == 2
+                    and len(task_start_events) == 1
+                    and len(tool_start_events) == 2
+                    and len(tool_result_events) == 2
                     and len(done_events) == 1
                     and done_events[-1]["summary"] == summary
                     and all(ev["call_id"] == call_id for ev in drained)
-                    and [ev["step"] for ev in step_events] == [1, 2]
-                    and [ev["tool"] for ev in step_events] == ["read", "write_file"]
-                    and len(step_events[-1]["observation_preview"]) <= 121
+                    and [ev["step"] for ev in tool_start_events] == [1, 2]
+                    and [ev["tool"] for ev in tool_start_events] == ["read", "write_file"]
+                    and [ev["sub_call_id"] for ev in tool_start_events] == ["child_1", "child_2"]
+                    and [ev["sub_call_id"] for ev in tool_result_events] == ["child_1", "child_2"]
+                    and len(tool_result_events[-1]["observation_preview"]) <= 121
                 )
                 successes += int(ok)
         finally:

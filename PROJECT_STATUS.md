@@ -1,4 +1,4 @@
-﻿# NanoAgent v0.8 - 项目进度总结
+﻿# NanoAgent v0.9 - 项目进度总结
 
 ## 项目概述
 
@@ -8,15 +8,17 @@ NanoAgent 是一个基于 ReAct 模式的轻量级 AI Agent 实现，采用 Fast
 
 ```
 app/
-├── agent.py              # Tool Call 主循环实现
+├── agent.py              # Tool Call 主循环与 SSE 事件编排
+├── compression.py        # CompressionMixin：L1/L2 压缩、摘要解析、兜底摘要与审计记录
+├── subagent_runner.py    # 父 Agent 侧 run_subagent 线程/队列事件转发
 ├── prompt_loader.py      # Markdown prompt 加载与占位符渲染
 ├── llm/                  # LLM Client 封装层
 │   ├── client.py         # OpenAI-compatible adapter
 │   ├── provider_config.py # 从 config.yaml + .env 解析 provider 配置
 │   └── types.py          # LLMResponse / ToolCall / Usage DTO
-├── registry.py           # 工具执行器与 OpenAI Tool Call schema 注册表
+├── registry.py           # 工具执行器、OpenAI Tool Call schema 与 dispatch 辅助
 ├── session_manager.py    # 会话持久化管理（文件夹存储）
-├── todo_manager.py       # 全局 Todo 状态管理（单例）
+├── todo_manager.py       # Todo 状态管理；每个 Agent/session 独立持有实例
 ├── server.py             # FastAPI 服务端点
 ├── config.yaml           # 配置参数（provider presets, max_steps, compression 等）
 ├── prompts/              # Prompt 模板
@@ -41,7 +43,7 @@ app/
 │   ├── current_time.py  # 当前时间
 │   ├── system_info.py   # 系统信息
 │   ├── install_skill.py # ClawHub/GitHub Skill 安装
-│   ├── summarize.py     # 上下文压缩工具（内部使用，非 LLM 可见）
+│   ├── summarize.py     # 摘要 transcript 格式化辅助（内部使用，非 LLM 可见）
 │   ├── subagent.py      # run_subagent 子任务隔离执行工具
 │   └── workspace.py     # 安全沙箱（safe_path 路径校验）
 ├── static/               # 前端资源
@@ -72,8 +74,8 @@ app/
 - **Provider 化多模型支持**：DeepSeek、Kilo、Ollama、Custom provider presets 统一配置在 `config.yaml`
 - **工具系统**：`registry.py` 通过 `TOOL_EXECUTORS` 和 `TOOLS_SCHEMA` 显式注册工具，工具文件保留 `@tool` 装饰器作为兼容标记
 - **联网搜索工具**：`websearch` 使用 Tavily Search API，支持最新信息、新闻、财经、时间范围和域名过滤搜索
-- **子 Agent 派发**：`run_subagent` 可将独立调研、分析、爬取、批处理、报告任务隔离到子 Agent 执行，完成后只把结构化摘要返回父 Agent
-- **子 Agent 可视化**：前端以专用卡片展示子任务描述、运行状态、内部工具步骤和最终结构化摘要
+- **子 Agent 派发**：`run_subagent` 可将独立调研、分析、爬取、批处理、报告任务隔离到子 Agent 执行，支持单任务和批量并发，完成后只把结构化摘要返回父 Agent
+- **子 Agent 可视化**：前端以专用卡片展示子任务描述、运行状态、内部工具步骤和最终结构化摘要；运行中即可展开内部调用，工具步骤采用单行缩略展示
 - **Prompt 模板化**：主系统提示、压缩摘要、兜底摘要、子 Agent 系统提示和子任务摘要均拆分到 `app/prompts/*.md`
 - **Web UI**：FastAPI SSE 流式输出 + Vue 3 响应式前端
 - **实时流式**：逐 token 实时渲染，支持中断恢复
@@ -100,7 +102,7 @@ app/
 - **中断恢复**：loading 时可切换会话，自动中断当前流，支持任务重连
 - **错误处理**：网络错误、模型异常的友好提示
 - **面板折叠**：左侧会话列表和右侧任务面板支持折叠
-- **子 Agent 卡片**：运行中默认展开，完成后折叠为摘要；历史会话从 tool observation 恢复摘要卡片
+- **子 Agent 卡片**：运行中默认展开，内部工具调用开始时立即显示；完成后折叠为摘要；历史会话从 trace events 和 tool observation 恢复步骤与摘要卡片；刷新或切回页面后通过 active task + SSE 重连继续接收新的内部工具步骤
 
 ### ✅ 部署支持
 - **Docker 化**：Dockerfile + docker-compose.yml 一键部署
@@ -133,10 +135,12 @@ app/
 
 ### ✅ 上下文压缩稳定性
 - **三层压缩策略**：Layer 1 压缩旧 tool 结果，Layer 2 生成 LLM 摘要，Layer 3 在异常时本地兜底
+- **压缩逻辑模块化**：`CompressionMixin` 已从 `agent.py` 拆到 `compression.py`，保留原有状态流语义，同时让主循环更聚焦
 - **压缩 prompt 外置**：`compression.layer2.summary.prompt` / `fallback_prompt` / `subagent_hint_prompt` 可在配置中指定 Markdown 模板
 - **摘要重试机制**：记录 `summary_finish_reason`，遇到 `length` 截断或半截 JSON 自动使用更大 `retry_max_tokens` 重试
 - **独立摘要模型**：`SUMMARY_LLM_*` 可单独配置摘要 provider/model，例如 Docker 内访问宿主机 Ollama
 - **独立子 Agent 模型**：`SUBAGENT_LLM_*` 可单独配置子 Agent provider/model；未设置时继承父 Agent 当前 provider/model
+- **父 Agent 事件转发解耦**：`subagent_runner.py` 负责 `run_subagent` 的线程、队列轮询和 trace 事件转发，`agent.py` 只保留主流程编排
 - **兜底摘要增强**：LLM 摘要失败时继承既有 `[上下文摘要]`，避免多次压缩后丢失核心任务进展
 - **压缩后行为保持**：压缩后的上下文会追加子任务派发提示，避免长任务压缩后忘记使用 `run_subagent` 隔离探索分支
 - **状态去重与裁剪**：`Authoritative Session State` 对近似重复约束做归一化合并，observations 保留最近 80 条
@@ -170,7 +174,8 @@ app/
 
 2. **Multi-agent** 
    - ✅ 已完成：`run_subagent` 子任务隔离执行，支持父 Agent 派发独立任务并接收结构化摘要
-   - 🔄 待完善：多 Agent 间长期状态共享、任务队列、并发调度和可观测性
+   - ✅ 已完成：批量子任务并发执行、运行中 trace 事件、前端步骤可视化和会话恢复
+   - 🔄 待完善：多 Agent 间长期状态共享、任务队列持久化和更细粒度可观测性
 
 ### 🔄 长期愿景 (P2 - 高级特性)
 1. **上下文压缩** 
@@ -203,6 +208,7 @@ app/
 - `start_task(session_id, question, agent, history)`: 启动后台任务，返回 task_id
 - `_evict()`: 当任务数量超过 `_MAX_TASKS=200` 时按 `created_at` 淘汰最早任务
 - `get_task(task_id)`: 获取任务状态
+- `get_latest_task_for_session(session_id, active_only=True)`: 获取指定 session 最新运行中任务元数据，用于刷新后恢复观察流
 - `get_events_from_index(task_id, last_index)`: 获取新事件用于回放
 - `is_task_done(task_id)`: 检查任务是否完成
 
@@ -211,6 +217,14 @@ app/
 - `ToolCallAgent(..., todo, tools_override, system_prompt)`: 支持为子 Agent 注入独立 Todo、工具集合和系统提示
 - `run_iter(question, history=None)`: 核心 Tool Call 循环生成器
 - `run(question)`: 阻塞式执行
+
+#### CompressionMixin (compression.py)
+- `estimate_tokens(messages)`: 估算上下文 token，用于压缩触发判断
+- `micro_compact(messages)`: L1 静默压缩旧 tool 结果，并将 observation 摘要写入 session state
+- `auto_compact(messages)`: L2/L3 上下文压缩，调用 summary LLM、解析 state patch、重建压缩锚点并记录 `compression_history`
+
+#### Subagent Runner (subagent_runner.py)
+- `run_subagent_with_events(...)`: 父 Agent 侧包装器，启动 `run_subagent` 工具线程，持续转发子 Agent trace 事件，并返回最终 summary 作为 tool observation
 
 #### Prompt Loader (prompt_loader.py)
 - `load_prompt(path)`: 从 `app/prompts/` 或显式 `prompts/...` 路径读取 Markdown prompt
@@ -223,12 +237,12 @@ app/
 - `POST /chat`: 阻塞式对话
 - `GET /sessions`: 列出会话摘要
 - `POST /sessions`: 新建会话
-- `GET /sessions/{sid}`: 获取会话详情
+- `GET /sessions/{sid}`: 获取会话详情；若存在运行中后台任务，会附带 `active_task`
 - `DELETE /sessions/{sid}`: 删除会话
 - `POST /webhook/telegram`: 接收 Telegram Webhook 推送（备用），非文字消息忽略，文字消息后台处理并回复
 
 #### 公共辅助 (server.py)
-- `_poll_task_events(task_id, start_index)`: SSE 事件轮询生成器，`chat_stream` 和 `task_stream` 共用
+- `_poll_task_events(task_id, start_index)`: SSE 事件轮询生成器，`chat_stream` 和 `task_stream` 共用；`start_index` 使用前端已收到的公开事件序号，跳过内部持久化事件，并为推送事件附加 `event_index`
 - `_sse_payload(event)`: 将 event dict 格式化为 SSE data 行
 - `_SSE_HEADERS`: SSE 响应头常量
 - `extract_final_reply(task)`: 从 TaskState.events 倒序查找最后一条 `type=="final"` 事件，返回其 content
@@ -247,8 +261,9 @@ app/
 - `_polling_enabled()`: 检测 `TELEGRAM_POLLING_ENABLED` 环境变量
 
 #### 子 Agent 工具 (tools/subagent.py)
-- `run_subagent(task, context="", event_queue=None, call_id="", parent_provider="", parent_model_id="")`: 派发独立子任务，子 Agent 拥有除 `run_subagent` 外的常规工具，完成后返回结构化摘要；可通过父 Agent 透传 provider/model
+- `run_subagent(task, context="", event_queue=None, call_id="", parent_provider="", parent_model_id="", max_concurrency=3)`: 派发独立子任务；`task` 可为字符串或任务对象数组 `[{id, task, context?}]`，批量模式按 `max_concurrency` 并发执行。子 Agent 拥有除 `run_subagent` 外的常规工具，完成后返回结构化摘要；可通过父 Agent 透传 provider/model
 - `_build_sub_tools()`: 构造子 Agent 工具集合，禁止递归子任务
+- `_emit_task_start()` / `_emit_step()` / `_emit_done()`: 向父 Agent 推送子任务 trace 事件，覆盖 task_start、tool_start、tool_result、task_done
 - `_summarize(llm, messages, task)`: 使用 `subagent_summary.md` 将子 Agent 历史压缩为父 Agent 可用摘要
 - `_SUBAGENT_TIMEOUT`: 子 Agent 线程等待上限，当前为 600 秒，超时返回降级消息
 
@@ -259,6 +274,10 @@ app/
 
 #### 前端公共函数 (static/index.html)
 - `attachStreamHandlers(es, opts)`: 统一绑定 SSE `onmessage`/`onerror`，`send` 和 `resumeTask` 共用
+- `applySubagentTrace(cards, ev)`: 将 `subagent_step` trace 事件应用到单个或批量子 Agent 卡片
+- `upsertSubagentStep(steps, ev)`: 按 `sub_call_id` 原地更新子 Agent 内部工具步骤，运行中显示一行缩略，结果到达后关闭 running 状态
+- `normalizeTaskInfo()` / `getSessionTaskInfo()`: 统一解析后端 `active_task`、内存映射和 localStorage 中的任务恢复信息
+- `reconnectCurrentTask()`: 页面重新可见或 SSE 临时断开时，按 `lastEventIndex` 继续订阅当前任务
 
 ### 📊 重要变量
 
@@ -340,15 +359,16 @@ TOOL_EXECUTORS = {
     "bash": _exec_bash,
     "web_fetch": _exec_web_fetch,
     "websearch": _exec_websearch,
-    "run_subagent": run_subagent,  # 由 tools/subagent.py 动态追加
+    "run_subagent": _exec_subagent,
 }
 
 TOOLS_SCHEMA = [
     {"type": "function", "function": {"name": "websearch", ...}},
 ]
 
-def execute_tool_call(name, args_json):
-    # 从 TOOL_EXECUTORS 查找 executor，并以 kwargs 调用
+def execute_tool_call(name, args_json, executors=None):
+    # 默认从 TOOL_EXECUTORS 查找 executor；子 Agent 可传入裁剪后的 executors
+    # JSON 参数解析后以 kwargs 调用
 ```
 
 ## 开发环境
@@ -359,6 +379,33 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.9 (2026-05-13)
+
+**子 Agent 恢复稳定性与 Agent 内核整理**
+- `app/server.py`：`GET /sessions/{sid}` 附带当前 session 的 `active_task`，前端刷新后即使 localStorage 映射失效，也能重新订阅仍在运行的后台任务。
+- `app/server.py`：`/tasks/{task_id}/stream` 使用公开事件序号 `event_index` 做断点续传，跳过 `message_delta` / `context_snapshot` 等内部持久化事件，避免前端索引和后端原始事件数组错位。
+- `app/server.py`：任务已结束但重连时未推到 `done` 的场景会补发 `done`，避免前端残留任务映射后反复重连。
+- `app/static/index.html`：刷新/切换会话恢复历史卡片时同时注册到 `callCards`，后续 live `subagent_step` 可继续追加到同一张子 Agent 卡片。
+- `app/static/index.html`：SSE 临时断开或页面重新可见时按 `lastEventIndex` 自动恢复观察流，子 Agent 新工具调用可继续动态渲染。
+- 新增 `app/compression.py`：将 `estimate_tokens()`、`micro_compact()`、`auto_compact()`、摘要解析、兜底摘要和压缩审计记录迁入 `CompressionMixin`，并在类注释中显式列出对 `ToolCallAgent` 的依赖。
+- 新增 `app/subagent_runner.py`：封装父 Agent 执行 `run_subagent` 时的线程启动、队列轮询和 trace 事件转发，`agent.py` 主循环只保留 `yield from run_subagent_with_events(...)`。
+- `app/registry.py`：`execute_tool_call()` 支持 `executors` 参数，主 Agent 和子 Agent 可共用同一套 dispatch 逻辑，避免 `agent.py` 中重复解析 JSON 和调用工具。
+- `app/agent.py`：保留核心 Tool Call loop、usage 统计、SSE 事件和 LLM 调用前权威状态注入；上下文压缩和 subagent 运行细节已迁出，文件规模从约 981 行降至约 525 行。
+- README / README_zh / PROJECT_STATUS 同步更新项目结构、测试说明、工具注册模式和子 Agent 刷新恢复链路。
+- 已验证：`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/test_state_flow.py tests/test_subagent_stability.py` 全部通过；`PYTHONPYCACHEPREFIX=/tmp/nanoagent_pycache python3 -m py_compile app/server.py app/task_manager.py` 通过。
+
+### v0.9 (2026-05-12)
+
+**子 Agent 批量并发与运行中可观测性**
+- `app/tools/subagent.py`：`run_subagent` 支持单任务字符串和任务对象数组 `[{id, task, context?}]`，批量模式按 `max_concurrency` 并发执行。
+- `app/tools/subagent.py`：新增 task/tool 级 trace 事件，覆盖 `task_start`、`tool_start`、`tool_result`、`task_done`，子工具调用发起时即可推送给父 Agent。
+- `app/agent.py`：父 Agent 执行 `run_subagent` 时启动工具线程并持续转发子 Agent trace 事件，不再等子任务完成后才让前端看到内部流程。
+- `app/static/index.html`：子 Agent 卡片运行中默认展开；内部工具调用以单行缩略展示（工具名、参数摘要、运行状态点），避免 observation 预览撑开页面。
+- `app/static/index.html`：新增批量子 Agent 容器，展示每个子任务的独立状态、步骤和摘要，支持会话切换/刷新后的 trace 恢复。
+- `app/session_manager.py`、`app/server.py`、`app/task_manager.py`：保存 `trace_events`，历史会话可恢复子 Agent 内部步骤与最终摘要。
+- `tests/test_subagent_stability.py`：测试覆盖子任务运行中事件、父 Agent SSE 转发和子 Agent provider/model 继承逻辑。
+- README / README_zh / PROJECT_STATUS 更新到 v0.9，并同步批量子任务、运行中展开和单行工具步骤说明。
 
 ### v0.8.5 (2026-05-11)
 
@@ -594,4 +641,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-05-11*
+*最后更新: 2026-05-13*

@@ -88,6 +88,9 @@ class TaskManager:
                     elif event["type"] == "todo_update" and session:
                         session.tasks = event["items"]
                         SESSION_MGR._save_session(session_id)
+                    elif event["type"] in {"subagent_step", "subagent_step_done", "subagent_error"} and session:
+                        session.add_trace_event(event)
+                        SESSION_MGR._save_session(session_id)
 
                     with task_state.lock:
                         task_state.events.append(event)
@@ -116,6 +119,32 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[TaskState]:
         """获取任务状态"""
         return self.tasks.get(task_id)
+
+    def get_latest_task_for_session(
+        self,
+        session_id: str,
+        active_only: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the newest task metadata for a session.
+
+        This lets the UI recover a running task after refresh even when the
+        browser-side task map was lost or stale.
+        """
+        candidates = [
+            task for task in self.tasks.values()
+            if task.session_id == session_id
+        ]
+        for task in sorted(candidates, key=lambda t: t.created_at, reverse=True):
+            with task.lock:
+                if active_only and task.status in {"done", "error", "cancelled"}:
+                    continue
+                return {
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "created_at": task.created_at,
+                    "event_count": len(task.events),
+                }
+        return None
 
     def cancel_task(self, task_id: str) -> bool:
         """Request a task to stop after the current non-interruptible operation."""
