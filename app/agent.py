@@ -136,6 +136,19 @@ class ToolCallAgent(CompressionMixin):
     def _execute_tool_call(self, tool_name: str, arguments_json: str) -> str:
         return execute_tool_call(tool_name, arguments_json, executors=self.tools)
 
+    def _invalid_tool_call_error(self, tool_calls) -> Optional[str]:
+        for tc in tool_calls or []:
+            args_json = tc.arguments or "{}"
+            try:
+                json.loads(args_json) if args_json.strip() else {}
+            except json.JSONDecodeError as exc:
+                preview = args_json[:160].replace("\n", "\\n")
+                return (
+                    f"Invalid JSON in tool call arguments for `{tc.name}` "
+                    f"({tc.id}): {exc}. Preview: {preview}"
+                )
+        return None
+
     def _new_summary_llm(self):
         return LLMClient(purpose="summary")
 
@@ -312,6 +325,27 @@ class ToolCallAgent(CompressionMixin):
                 return
 
             finish_reason = response.finish_reason
+
+            invalid_tool_call_error = self._invalid_tool_call_error(response.tool_calls)
+            if invalid_tool_call_error:
+                error_text = (
+                    "模型返回了格式错误的工具调用参数，本轮工具调用已跳过，"
+                    "并且不会写入 tool_calls 历史。请重试当前请求。"
+                )
+                msg_dict = {
+                    "role": "assistant",
+                    "content": error_text,
+                }
+                messages.append(msg_dict)
+                self.messages = messages
+                new_messages.append(msg_dict)
+                if new_messages and new_messages[-1].get("role") == "assistant":
+                    new_messages[-1]["usage"] = round_usage.copy()
+                yield {"type": "error", "content": invalid_tool_call_error}
+                yield {"type": "message_delta", "message": msg_dict}
+                yield {"type": "new_messages", "messages": new_messages}
+                yield {"type": "done"}
+                return
 
             # 把 assistant 回复加入历史
             msg_dict = {"role": "assistant"}

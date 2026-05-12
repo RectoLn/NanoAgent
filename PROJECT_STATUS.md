@@ -1,4 +1,4 @@
-﻿# NanoAgent v0.9 - 项目进度总结
+﻿# NanoAgent v0.9.1 - 项目进度总结
 
 ## 项目概述
 
@@ -84,6 +84,7 @@ app/
 - **多轮对话**：上下文传递，支持连续对话
 - **会话持久化**：每个 session 独立 JSON 文件存储
 - **原子写入**：session JSON 使用临时文件 + `os.replace()` 保存，降低并发写入或崩溃导致的文件损坏风险
+- **Tool Call JSON 防污染**：模型返回工具调用后先校验 `function.arguments`，非法 JSON 不写入 `tool_calls` 历史；旧会话中的非法 tool_call 组在发送给 LLM 前过滤
 - **会话切换**：前端支持创建/删除/切换会话
 - **自动恢复**：页面刷新后恢复上次会话
 - **展示历史 / 模型上下文分离**：`display_messages` 保存完整 UI 历史，`messages` 仅作为可压缩的 LLM 上下文
@@ -108,6 +109,7 @@ app/
 - **Docker 化**：Dockerfile + docker-compose.yml 一键部署
 - **跨平台**：Linux/macOS/Windows Docker Desktop 支持
 - **环境配置**：.env 文件配置 API Key，支持多提供商
+- **Bind mount 权限修复**：`docker-entrypoint.sh` 启动时修正 `/app/sessions` 与 `/app/workspace` 运行时目录 owner，然后通过 `gosu` 降权到 `APP_UID:APP_GID` 运行服务，避免 root 生成宿主机难编辑文件
 
 ### ✅ Telegram Bot 接入
 - **Long Polling**：`TELEGRAM_POLLING_ENABLED=true` 时服务启动即自动拉取消息，无需 ngrok 或公网地址
@@ -299,6 +301,8 @@ app/
 - `TAVILY_API_KEY`: Tavily Search API Key，用于 `websearch` 联网搜索工具
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot Token（由 @BotFather 获取，可选）
 - `TELEGRAM_POLLING_ENABLED`: 设为 `true` 才启动 Long Polling（默认 false，防多实例抢占）
+- `APP_UID`: Docker bind mount 权限修复和降权运行使用的宿主机 UID
+- `APP_GID`: Docker bind mount 权限修复和降权运行使用的宿主机 GID
 
 #### 全局状态
 - `SESSION_MGR`: SessionManager 单例
@@ -379,6 +383,19 @@ def execute_tool_call(name, args_json, executors=None):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.9.1 (2026-05-13)
+
+**Docker 权限、路径提示与 Tool Call 稳定性**
+- `Dockerfile`：安装 `gosu` 并接入 `docker-entrypoint.sh`，容器启动时先修正运行时目录权限，再降权运行 `python server.py`。
+- `docker-entrypoint.sh`：创建并 `chown` `/app/sessions`、`/app/workspace/.tmp`、`skills`、`wiki`、`transcripts`，解决 bind mount 下 `install_skill` 与会话文件写入权限问题。
+- `docker-compose.yml`：移除固定 `user: 1006:1006`，改由 entrypoint 根据 `APP_UID` / `APP_GID` 降权，适配不同 Linux 用户与 Docker Desktop 环境。
+- `.env.example`：新增 `APP_UID`、`APP_GID`，并补齐 summary/subagent/websearch 相关配置项说明。
+- `app/prompts/system.md`：将裸 `wiki/...`、`skills/index.md`、`SOUL.md` 等路径明确为 `workspace/wiki/...`，避免模型调用文件工具时误用 `/wiki/...`。
+- `app/agent.py`：保存 assistant tool call 前校验 `function.arguments` 是否为合法 JSON；非法时转为普通 assistant 错误消息并停止本轮，不再污染 session。
+- `app/session_manager.py`：发送历史给 LLM 前过滤旧会话中已存在的非法 tool_call 组，修复 provider 因历史 `Invalid JSON in tool call arguments` 返回 400 的问题。
+- `tests/test_tool_call_json_guard.py`：新增非法 tool_call 参数防护测试，覆盖新响应拦截和旧历史过滤。
+- 已验证：`python -m unittest tests.test_tool_call_json_guard`、`python -m unittest tests.test_state_flow tests.test_subagent_stability` 全部通过；容器重启后确认旧 session 上下文不再携带 `</tool_call>` 坏参数。
 
 ### v0.9 (2026-05-13)
 

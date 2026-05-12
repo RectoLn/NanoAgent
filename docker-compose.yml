@@ -7,7 +7,6 @@ services:
       - ./.env:/app/.env      # 将宿主机的 .env 文件精准映射到容器的 /app/.env
     env_file:
       - .env
-    user: "${APP_UID:-1006}:${APP_GID:-1006}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

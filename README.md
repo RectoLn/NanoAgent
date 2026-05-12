@@ -17,6 +17,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Prompt Templates**: System, compression, fallback, and subagent prompts are stored as editable markdown files
 - **Todo Management**: Multi-step task planning and tracking
 - **Session Persistence**: Independent session storage with automatic saving to JSON files
+- **Tool Call JSON Guard**: Invalid model-emitted tool call arguments are blocked before persistence, and legacy bad tool-call groups are filtered from LLM context
 - **Web UI**: FastAPI backend + Vue 3 frontend with stream output
 - **Markov Streaming**: Real-time token-by-token output
 - **Telegram Bot**: Long Polling integration—send messages to Bot, get Agent responses directly in Telegram (no ngrok required)
@@ -96,6 +97,17 @@ http://localhost:9090
 
 Docker Compose also maps `host.docker.internal` to the Docker host, so Ollama running on the host can be reached from the container through `http://host.docker.internal:11434/v1`.
 
+### Linux Bind-Mount Permissions
+
+The container starts as root only long enough to create/chown runtime directories, then drops to `APP_UID:APP_GID` through `gosu` before running `python server.py`. This keeps generated sessions, skills, wiki files, and transcripts editable by the host user while avoiding a long-running root Agent.
+
+On Linux hosts, set these in `.env` to match your user:
+
+```bash
+APP_UID=$(id -u)
+APP_GID=$(id -g)
+```
+
 ## Environment Variables
 
 | Variable | Description |
@@ -117,6 +129,8 @@ Docker Compose also maps `host.docker.internal` to the Docker host, so Ollama ru
 | `TAVILY_API_KEY` | Tavily Search API key for the `websearch` tool |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token from @BotFather (optional) |
 | `TELEGRAM_POLLING_ENABLED` | Set to `true` to enable Telegram Long Polling |
+| `APP_UID` | Linux bind-mount owner UID used by the Docker entrypoint before dropping privileges |
+| `APP_GID` | Linux bind-mount owner GID used by the Docker entrypoint before dropping privileges |
 
 ## Configuration
 
@@ -284,10 +298,10 @@ app/
 
 ## Testing
 
-State flow and subagent behavior are covered by `tests/test_state_flow.py` and `tests/test_subagent_stability.py`, including context compaction invariants, task/tool running events, parent SSE forwarding, refresh recovery, and `SUBAGENT_LLM_*` precedence over inherited parent provider/model.
+State flow, subagent behavior, and tool-call history safety are covered by `tests/test_state_flow.py`, `tests/test_subagent_stability.py`, and `tests/test_tool_call_json_guard.py`, including context compaction invariants, task/tool running events, parent SSE forwarding, refresh recovery, `SUBAGENT_LLM_*` precedence, and invalid tool-call argument filtering.
 
 ```bash
-python3 -m unittest tests/test_state_flow.py tests/test_subagent_stability.py
+python3 -m unittest tests/test_state_flow.py tests/test_subagent_stability.py tests/test_tool_call_json_guard.py
 ```
 
 ## License

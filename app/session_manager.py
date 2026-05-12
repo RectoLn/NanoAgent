@@ -33,6 +33,17 @@ from session_state import (
 )
 
 
+def _tool_calls_have_valid_json_arguments(tool_calls: List[Dict[str, Any]]) -> bool:
+    for tc in tool_calls or []:
+        function = tc.get("function") or {}
+        args = function.get("arguments") or "{}"
+        try:
+            json.loads(args) if str(args).strip() else {}
+        except (TypeError, json.JSONDecodeError):
+            return False
+    return True
+
+
 class Session:
     def __init__(self, session_id: str, system_prompt: str = ""):
         self.session_id = session_id
@@ -124,6 +135,13 @@ class Session:
         while i < len(self.messages):
             msg = self.messages[i]
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                if not _tool_calls_have_valid_json_arguments(msg.get("tool_calls") or []):
+                    j = i + 1
+                    while j < len(self.messages) and self.messages[j].get("role") == "tool":
+                        j += 1
+                    i = j
+                    continue
+
                 required = [
                     tc.get("id")
                     for tc in msg.get("tool_calls") or []
