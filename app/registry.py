@@ -133,6 +133,32 @@ def _exec_web_fetch(url: str = "") -> str:
     return web_fetch(url)
 
 
+def _exec_websearch(
+    query: str = "",
+    max_results: int = 5,
+    search_depth: str = "basic",
+    topic: str = "general",
+    time_range: str = "",
+    include_domains=None,
+    exclude_domains=None,
+    include_answer: bool = False,
+    include_raw_content: bool = False,
+) -> str:
+    from tools.websearch import websearch
+
+    return websearch(
+        query=query,
+        max_results=max_results,
+        search_depth=search_depth,
+        topic=topic,
+        time_range=time_range,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        include_answer=include_answer,
+        include_raw_content=include_raw_content,
+    )
+
+
 def _exec_install_skill(url: str = "") -> str:
     from tools.install_skill import install_skill
 
@@ -172,6 +198,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_current_time": _exec_get_current_time,
     "get_system_info": _exec_get_system_info,
     "web_fetch": _exec_web_fetch,
+    "websearch": _exec_websearch,
     "install_skill": _exec_install_skill,
     "get_token_usage": _exec_get_token_usage,
 }
@@ -395,6 +422,62 @@ TOOLS_SCHEMA: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "websearch",
+            "description": (
+                "使用 Tavily Search API 联网搜索，适合查询最新信息、资料调研、新闻和域名过滤搜索。"
+                "返回标题、URL、摘要、相关度和响应元数据。"
+                "需要环境变量 TAVILY_API_KEY；未配置时会提醒用户去 Tavily 官网获取并配置。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词。建议像搜索引擎查询一样简短明确。",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "返回结果数量，1-20，默认 5。",
+                    },
+                    "search_depth": {
+                        "type": "string",
+                        "enum": ["ultra-fast", "fast", "basic", "advanced"],
+                        "description": "搜索深度/速度权衡，默认 basic。",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "enum": ["general", "news", "finance"],
+                        "description": "搜索主题，默认 general；新闻用 news，财经用 finance。",
+                    },
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["", "day", "week", "month", "year", "d", "w", "m", "y"],
+                        "description": "可选时间范围过滤：day/week/month/year 或 d/w/m/y。",
+                    },
+                    "include_domains": {
+                        "type": "string",
+                        "description": "可选，仅包含这些域名，多个域名用英文逗号分隔。",
+                    },
+                    "exclude_domains": {
+                        "type": "string",
+                        "description": "可选，排除这些域名，多个域名用英文逗号分隔。",
+                    },
+                    "include_answer": {
+                        "type": "boolean",
+                        "description": "是否请求 Tavily 返回综合答案，默认 false。",
+                    },
+                    "include_raw_content": {
+                        "type": "boolean",
+                        "description": "是否包含页面原始解析内容，默认 false；开启会显著增加返回长度。",
+                    },
+                },
+                "required": ["query"],
             },
         },
     },

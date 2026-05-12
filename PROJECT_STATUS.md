@@ -14,7 +14,7 @@ app/
 │   ├── client.py         # OpenAI-compatible adapter
 │   ├── provider_config.py # 从 config.yaml + .env 解析 provider 配置
 │   └── types.py          # LLMResponse / ToolCall / Usage DTO
-├── registry.py           # 工具注册表（自动扫描 tools/ 目录）
+├── registry.py           # 工具执行器与 OpenAI Tool Call schema 注册表
 ├── session_manager.py    # 会话持久化管理（文件夹存储）
 ├── todo_manager.py       # 全局 Todo 状态管理（单例）
 ├── server.py             # FastAPI 服务端点
@@ -34,8 +34,13 @@ app/
 │   ├── edit_file.py     # 文件编辑
 │   ├── read_file.py     # 文件读取
 │   ├── web_fetch.py     # 网页抓取
+│   ├── websearch.py     # Tavily 联网搜索
 │   ├── write_file.py    # 文件写入
 │   ├── todo.py          # Todo 管理
+│   ├── compact.py       # 主动上下文压缩触发器
+│   ├── current_time.py  # 当前时间
+│   ├── system_info.py   # 系统信息
+│   ├── install_skill.py # ClawHub/GitHub Skill 安装
 │   ├── summarize.py     # 上下文压缩工具（内部使用，非 LLM 可见）
 │   ├── subagent.py      # run_subagent 子任务隔离执行工具
 │   └── workspace.py     # 安全沙箱（safe_path 路径校验）
@@ -65,8 +70,10 @@ app/
 ### ✅ 核心功能
 - **Tool Call 循环**：基于 OpenAI Tool Call 协议的原生工具调用
 - **Provider 化多模型支持**：DeepSeek、Kilo、Ollama、Custom provider presets 统一配置在 `config.yaml`
-- **工具系统**：@tool 装饰器自动注册，支持动态工具扩展
+- **工具系统**：`registry.py` 通过 `TOOL_EXECUTORS` 和 `TOOLS_SCHEMA` 显式注册工具，工具文件保留 `@tool` 装饰器作为兼容标记
+- **联网搜索工具**：`websearch` 使用 Tavily Search API，支持最新信息、新闻、财经、时间范围和域名过滤搜索
 - **子 Agent 派发**：`run_subagent` 可将独立调研、分析、爬取、批处理、报告任务隔离到子 Agent 执行，完成后只把结构化摘要返回父 Agent
+- **子 Agent 可视化**：前端以专用卡片展示子任务描述、运行状态、内部工具步骤和最终结构化摘要
 - **Prompt 模板化**：主系统提示、压缩摘要、兜底摘要、子 Agent 系统提示和子任务摘要均拆分到 `app/prompts/*.md`
 - **Web UI**：FastAPI SSE 流式输出 + Vue 3 响应式前端
 - **实时流式**：逐 token 实时渲染，支持中断恢复
@@ -74,6 +81,7 @@ app/
 ### ✅ 会话管理 (P0 - 已完成)
 - **多轮对话**：上下文传递，支持连续对话
 - **会话持久化**：每个 session 独立 JSON 文件存储
+- **原子写入**：session JSON 使用临时文件 + `os.replace()` 保存，降低并发写入或崩溃导致的文件损坏风险
 - **会话切换**：前端支持创建/删除/切换会话
 - **自动恢复**：页面刷新后恢复上次会话
 - **展示历史 / 模型上下文分离**：`display_messages` 保存完整 UI 历史，`messages` 仅作为可压缩的 LLM 上下文
@@ -85,12 +93,14 @@ app/
 - **会话绑定**：任务状态与当前会话持久化关联
 - **独立运行**：任务在后端独立线程执行，支持前端断开重连
 - **中断恢复**：切换会话/刷新不影响任务执行，前端可重新观察
+- **内存淘汰**：后台任务保留上限为 200 个，超过后按 `created_at` 淘汰最早任务
 
 ### ✅ 用户体验优化
 - **响应式布局**：支持桌面/移动端，三栏自适应
 - **中断恢复**：loading 时可切换会话，自动中断当前流，支持任务重连
 - **错误处理**：网络错误、模型异常的友好提示
 - **面板折叠**：左侧会话列表和右侧任务面板支持折叠
+- **子 Agent 卡片**：运行中默认展开，完成后折叠为摘要；历史会话从 tool observation 恢复摘要卡片
 
 ### ✅ 部署支持
 - **Docker 化**：Dockerfile + docker-compose.yml 一键部署
@@ -126,6 +136,7 @@ app/
 - **压缩 prompt 外置**：`compression.layer2.summary.prompt` / `fallback_prompt` / `subagent_hint_prompt` 可在配置中指定 Markdown 模板
 - **摘要重试机制**：记录 `summary_finish_reason`，遇到 `length` 截断或半截 JSON 自动使用更大 `retry_max_tokens` 重试
 - **独立摘要模型**：`SUMMARY_LLM_*` 可单独配置摘要 provider/model，例如 Docker 内访问宿主机 Ollama
+- **独立子 Agent 模型**：`SUBAGENT_LLM_*` 可单独配置子 Agent provider/model；未设置时继承父 Agent 当前 provider/model
 - **兜底摘要增强**：LLM 摘要失败时继承既有 `[上下文摘要]`，避免多次压缩后丢失核心任务进展
 - **压缩后行为保持**：压缩后的上下文会追加子任务派发提示，避免长任务压缩后忘记使用 `run_subagent` 隔离探索分支
 - **状态去重与裁剪**：`Authoritative Session State` 对近似重复约束做归一化合并，observations 保留最近 80 条
@@ -137,6 +148,7 @@ app/
 - **Provider presets 外置**：`app/config.yaml` 的 `providers:` 块定义 base_url、default_model、api_key_env，新增 provider 无需改 Python 代码
 - **前端 provider 一级选择**：Web UI 从 `/meta` 获取 provider 列表，选择结果存入 localStorage；默认使用 provider 的 `default_model`
 - **摘要模型隔离**：`LLMClient(purpose="summary")` 优先读取 `SUMMARY_LLM_*`，不受前端聊天 provider 选择影响
+- **子 Agent 模型隔离/继承**：`LLMClient(purpose="subagent")` 优先读取 `SUBAGENT_LLM_*`；未配置时使用父 Agent 显式传入的 provider/model
 
 ## 待实现功能
 
@@ -179,7 +191,7 @@ app/
 
 #### SessionManager (session_manager.py)
 - `SessionManager()`: 单例，管理所有会话
-- `_save_session(session_id)`: 保存单个会话到 JSON
+- `_save_session(session_id)`: 使用临时文件 + `os.replace()` 原子保存单个会话到 JSON
 - `_load()`: 启动时加载所有会话文件
 - `create(system_prompt)`: 新建会话
 - `get(session_id)`: 获取会话
@@ -189,6 +201,7 @@ app/
 #### TaskManager (task_manager.py)
 - `TaskManager()`: 单例，管理所有后台任务
 - `start_task(session_id, question, agent, history)`: 启动后台任务，返回 task_id
+- `_evict()`: 当任务数量超过 `_MAX_TASKS=200` 时按 `created_at` 淘汰最早任务
 - `get_task(task_id)`: 获取任务状态
 - `get_events_from_index(task_id, last_index)`: 获取新事件用于回放
 - `is_task_done(task_id)`: 检查任务是否完成
@@ -234,9 +247,15 @@ app/
 - `_polling_enabled()`: 检测 `TELEGRAM_POLLING_ENABLED` 环境变量
 
 #### 子 Agent 工具 (tools/subagent.py)
-- `run_subagent(task, context="")`: 派发独立子任务，子 Agent 拥有除 `run_subagent` 外的常规工具，完成后返回结构化摘要
+- `run_subagent(task, context="", event_queue=None, call_id="", parent_provider="", parent_model_id="")`: 派发独立子任务，子 Agent 拥有除 `run_subagent` 外的常规工具，完成后返回结构化摘要；可通过父 Agent 透传 provider/model
 - `_build_sub_tools()`: 构造子 Agent 工具集合，禁止递归子任务
 - `_summarize(llm, messages, task)`: 使用 `subagent_summary.md` 将子 Agent 历史压缩为父 Agent 可用摘要
+- `_SUBAGENT_TIMEOUT`: 子 Agent 线程等待上限，当前为 600 秒，超时返回降级消息
+
+#### 联网搜索工具 (tools/websearch.py)
+- `websearch(query, max_results=5, search_depth="basic", topic="general", time_range="", include_domains=None, exclude_domains=None, include_answer=False, include_raw_content=False)`: 使用 Tavily Search API 搜索并返回 Markdown 风格结果
+- `TAVILY_API_KEY`: 必需环境变量；缺失时工具返回配置提示
+- 结果包含标题、URL、摘要、相关度、发布时间和响应元数据，输出超过 12000 字符会截断
 
 #### 前端公共函数 (static/index.html)
 - `attachStreamHandlers(es, opts)`: 统一绑定 SSE `onmessage`/`onerror`，`send` 和 `resumeTask` 共用
@@ -254,6 +273,11 @@ app/
 - `SUMMARY_LLM_API_KEY`: 可选摘要 API Key
 - `SUMMARY_LLM_BASE_URL`: 可选摘要 endpoint 覆盖，常用于 Docker 访问本地 Ollama
 - `SUMMARY_LLM_MODEL_ID`: 可选摘要模型覆盖
+- `SUBAGENT_LLM_PROVIDER`: 可选子 Agent provider；留空继承父 Agent 当前 provider/model
+- `SUBAGENT_LLM_API_KEY`: 可选子 Agent API Key
+- `SUBAGENT_LLM_BASE_URL`: 可选子 Agent endpoint 覆盖
+- `SUBAGENT_LLM_MODEL_ID`: 可选子 Agent 模型覆盖
+- `TAVILY_API_KEY`: Tavily Search API Key，用于 `websearch` 联网搜索工具
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot Token（由 @BotFather 获取，可选）
 - `TELEGRAM_POLLING_ENABLED`: 设为 `true` 才启动 Long Polling（默认 false，防多实例抢占）
 
@@ -312,13 +336,19 @@ compression:
 
 ### 📝 工具注册模式 (registry.py)
 ```python
-TOOL_REGISTRY = {}
-def tool(func):
-    TOOL_REGISTRY[func.__name__] = func
-    return func
+TOOL_EXECUTORS = {
+    "bash": _exec_bash,
+    "web_fetch": _exec_web_fetch,
+    "websearch": _exec_websearch,
+    "run_subagent": run_subagent,  # 由 tools/subagent.py 动态追加
+}
+
+TOOLS_SCHEMA = [
+    {"type": "function", "function": {"name": "websearch", ...}},
+]
 
 def execute_tool_call(name, args_json):
-    # 调用工具函数
+    # 从 TOOL_EXECUTORS 查找 executor，并以 kwargs 调用
 ```
 
 ## 开发环境
@@ -329,6 +359,37 @@ def execute_tool_call(name, args_json):
 - **部署**: Docker + docker-compose
 
 ## 更新日志
+
+### v0.8.5 (2026-05-11)
+
+**子 Agent 可视化与稳定性测试**
+- `app/tools/subagent.py`：子 Agent 执行内部工具调用时发出 `subagent_step` 事件，完成后返回带 `##` 分块的结构化摘要。
+- `app/agent.py`：父 Agent 执行 `run_subagent` 时转发子 Agent 步骤事件，并把最终摘要作为 tool observation 写入会话历史。
+- `app/static/index.html`：新增子 Agent 专用卡片；运行中默认展开，展示内部 Steps 列表，完成后自动折叠并展示最终摘要；历史会话可恢复摘要卡片。
+- `tests/test_subagent_stability.py`：新增子 Agent 稳定性测试，覆盖步骤事件、父 Agent SSE 转发和 `SUBAGENT_LLM_*` 配置优先级。
+- README / README_zh / PROJECT_STATUS 同步更新子 Agent 可视化、测试脚本和独立 API 配置说明。
+
+### v0.8.4 (2026-05-11)
+
+**子 Agent 模型路由隔离**
+- `app/llm/provider_config.py`：新增 `purpose="subagent"` 解析分支，优先读取 `SUBAGENT_LLM_PROVIDER`、`SUBAGENT_LLM_API_KEY`、`SUBAGENT_LLM_BASE_URL`、`SUBAGENT_LLM_MODEL_ID`。
+- `app/llm/client.py`：暴露解析后的 `provider`、`base_url`、`model`，用于父 Agent 向子 Agent 透传当前模型配置。
+- `app/agent.py`：父 Agent 调用 `run_subagent` 时传入当前 provider/model；若未设置 `SUBAGENT_LLM_*`，子 Agent 会继承 Web UI 当前选择。
+- `app/tools/subagent.py`：子 Agent 改用 `LLMClient(purpose="subagent", override=parent_override)` 初始化，支持独立配置和父配置继承。
+- `.env.example` / `.env`：新增子 Agent 独立 LLM 配置项，可为子 Agent 单独配置 OpenAI-compatible API。
+- README / README_zh / PROJECT_STATUS 同步更新环境变量、子 Agent 模型路由说明。
+
+### v0.8.3 (2026-05-11)
+
+**联网搜索工具与稳定性维护**
+- 新增 `app/tools/websearch.py`：通过 Tavily Search API 提供 `websearch` 工具，支持 `max_results`、`search_depth`、`topic`、`time_range`、`include_domains`、`exclude_domains`、`include_answer` 和 `include_raw_content`。
+- `app/registry.py`：新增 `_exec_websearch()`、`TOOL_EXECUTORS["websearch"]` 和 OpenAI Tool Call schema，模型可直接调用联网搜索。
+- `.env.example`：新增 `TAVILY_API_KEY`，用于配置 Tavily Search API Key。
+- `app/session_manager.py`：session JSON 保存改为临时文件 + `os.replace()` 原子写入。
+- `app/task_manager.py`：新增 `_MAX_TASKS = 200`、`TaskState.created_at` 和 `_evict()`，避免后台任务无限增长。
+- `app/tools/subagent.py`：新增 `_SUBAGENT_TIMEOUT = 600`，子 Agent 超时返回降级提示，避免父任务永久阻塞。
+- `app/server.py`：修复取消任务接口中的乱码错误文案为 `"任务不存在"`。
+- README / README_zh / PROJECT_STATUS 同步更新工具列表、环境变量和注册模式说明。
 
 ### v0.8.2 (2026-05-08)
 
@@ -441,7 +502,7 @@ def execute_tool_call(name, args_json):
 - 新增 `_escape_v2`、`_escape_code_v2`、`_process_inline_v2`、`_md_to_markdownv2`、`_md_to_html_simple` 五个辅助函数
 - `send_message` 实现三级降级链：MarkdownV2 → HTML → 纯文本，每级失败（400）时打日志并自动尝试下一级
 - 表格处理：先剥离行内格式（**bold**、*italic*、\`code\`），再放入等宽代码块，避免内部出现转义字符
-- 围栏代码块：不携带语言标识（如 ```python），防止 Telegram 解析异常（`</>` 图标）
+- 围栏代码块：不携带语言标识（例如 python 语言标记），防止 Telegram 解析异常（`</>` 图标）
 - `.env.example`：保留 `TELEGRAM_POLLING_ENABLED=false` 说明
 
 **Telegram 稳定性修复**
@@ -533,4 +594,4 @@ def execute_tool_call(name, args_json):
 
 ---
 
-*最后更新: 2026-05-08*
+*最后更新: 2026-05-11*

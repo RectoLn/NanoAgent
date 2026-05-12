@@ -18,6 +18,8 @@ Session Manager：持久化会话管理器
 
 import uuid
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -258,11 +260,16 @@ class SessionManager:
             "context_usage": s.context_usage,
         }
         file_path = self._dir / f"{session_id}.json"
+        fd, tmp_path = tempfile.mkstemp(dir=self._dir, suffix=".tmp")
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, file_path)
         except Exception as e:
+            os.unlink(tmp_path)
             print(f"保存 session {session_id} 失败: {e}")
+            raise
 
     def _load(self):
         """扫描 sessions/ 文件夹加载所有 sessions。"""

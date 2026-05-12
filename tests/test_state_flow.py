@@ -1,5 +1,6 @@
 import json
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
+
+# These tests mock all LLM behavior. Keep them runnable in lightweight
+# environments where the OpenAI SDK is not installed.
+if "openai" not in sys.modules:
+    openai_stub = types.ModuleType("openai")
+    openai_stub.OpenAI = object
+    sys.modules["openai"] = openai_stub
 
 import agent as agent_module
 from agent import ToolCallAgent

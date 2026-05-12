@@ -8,9 +8,11 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 
 - **Tool Call Loop**: Native tool calling based on OpenAI Tool Call protocol
 - **Provider-Based LLM Support**: OpenAI-compatible providers configured in `app/config.yaml` (DeepSeek, Kilo, Ollama, custom)
-- **Tool System**: Auto-registered tools with `@tool` decorator
+- **Tool System**: Tools are explicitly registered through `TOOL_EXECUTORS` and `TOOLS_SCHEMA` in `registry.py`
+- **Web Search Tool**: Built-in `websearch` uses Tavily Search API for recent information, news, finance, and domain-filtered research
 - **ClawHub Skill System**: `install_skill` tool for automated skill installation from ClawHub
 - **Subagent Delegation**: `run_subagent` isolates research, analysis, batch processing, and report tasks in a child Agent
+- **Subagent Visualization**: The web UI renders child-Agent cards with live step updates, status badges, and structured summaries
 - **Prompt Templates**: System, compression, fallback, and subagent prompts are stored as editable markdown files
 - **Todo Management**: Multi-step task planning and tracking
 - **Session Persistence**: Independent session storage with automatic saving to JSON files
@@ -20,6 +22,7 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 - **Context Compression**: Automatic context summarization for extended conversations, prevents token limit overflow
 - **Context-Aware Compaction Anchors**: Compacted history preserves the system prompt, initial user request, latest user request, and authoritative task status
 - **Independent Summary Model**: Context summaries can use `SUMMARY_LLM_*` (for example local Ollama) independently from the chat provider
+- **Independent Subagent Model**: Child Agents can use `SUBAGENT_LLM_*` or inherit the parent Agent's active provider/model
 - **Reliable Summary Fallback**: LLM summaries record finish reasons, retry on truncated output, and preserve prior summaries when falling back locally
 - **Compaction Follow-up Hint**: After context compaction, the Agent keeps a short reminder to delegate isolated research or batch work to subagents
 - **Split UI History / LLM Context**: Refresh shows the full display history while only the model-facing context is compacted
@@ -30,6 +33,10 @@ A minimal ReAct Agent implementation with LLM client, tool registry, web UI, Tel
 NanoAgent can delegate isolated work through the `run_subagent` tool. The child Agent runs with its own todo state, its own reduced system prompt, and all regular tools except recursive subagent calls. Its full message history is discarded after completion; the parent Agent receives a compact summary with the result, output paths, key findings, and unfinished items.
 
 This is intended for work that would otherwise pollute the main context: research, analysis, crawling, batch processing, report generation, or file-to-wiki extraction. Important outputs should be written to `workspace/wiki/...`, then the parent Agent can read the generated file when it needs the full detail.
+
+Subagent model routing can be configured separately with `SUBAGENT_LLM_PROVIDER`, `SUBAGENT_LLM_API_KEY`, `SUBAGENT_LLM_BASE_URL`, and `SUBAGENT_LLM_MODEL_ID`. If none of these variables are set, the parent Agent passes its active provider/model into `run_subagent`, so child Agents follow the provider selected in the web UI.
+
+When a parent Agent calls `run_subagent`, the web UI shows a dedicated child-Agent card. It opens while running, streams completed internal tool steps into a compact Steps list, then folds down to the final structured summary when done. Historical sessions restore the summary card from the saved tool observation.
 
 Prompt text is centralized under `app/prompts/` and loaded via `app/prompt_loader.py`, so behavior can be adjusted without editing the Agent loop:
 
@@ -98,6 +105,11 @@ Docker Compose also maps `host.docker.internal` to the Docker host, so Ollama ru
 | `SUMMARY_LLM_API_KEY` | Optional summary API key |
 | `SUMMARY_LLM_BASE_URL` | Optional summary endpoint override, useful for local Ollama from Docker |
 | `SUMMARY_LLM_MODEL_ID` | Optional summary model override |
+| `SUBAGENT_LLM_PROVIDER` | Optional subagent provider override; if unset, subagents inherit the parent Agent provider/model |
+| `SUBAGENT_LLM_API_KEY` | Optional subagent API key |
+| `SUBAGENT_LLM_BASE_URL` | Optional subagent endpoint override |
+| `SUBAGENT_LLM_MODEL_ID` | Optional subagent model override |
+| `TAVILY_API_KEY` | Tavily Search API key for the `websearch` tool |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token from @BotFather (optional) |
 | `TELEGRAM_POLLING_ENABLED` | Set to `true` to enable Telegram Long Polling |
 
@@ -230,8 +242,12 @@ app/
 │   ├── edit_file.py
 │   ├── bash.py
 │   ├── web_fetch.py
+│   ├── websearch.py      # Tavily web search
 │   ├── summarize.py      # Context compression utilities
 │   ├── install_skill.py  # ClawHub Skill installation
+│   ├── compact.py        # Manual context compaction trigger
+│   ├── current_time.py   # Current local time
+│   ├── system_info.py    # Container system information
 │   ├── subagent.py       # Isolated child-Agent delegation
 │   └── todo.py
 ├── prompts/       # Prompt templates
@@ -243,6 +259,28 @@ app/
 │   └── compression_subagent_hint.md
 └── static/       # Vue frontend
     └── index.html
+```
+
+## Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `bash` | Runs shell commands inside the container with a 30-second timeout and truncated output |
+| `read` / `write_file` / `edit` | Read, write, and patch files inside the `workspace/` sandbox |
+| `web_fetch` | Fetches a URL and extracts readable text from HTML |
+| `websearch` | Uses Tavily Search API; supports `max_results`, `search_depth`, `topic`, `time_range`, include/exclude domains, and `include_answer` |
+| `todo_add` / `todo_update` / `todo_replan` | Tracks multi-step task state |
+| `run_subagent` | Delegates isolated research, analysis, batch processing, and report work to a child Agent |
+| `install_skill` | Installs Skills from ClawHub or GitHub into `workspace/skills/` |
+| `compact` | Manually triggers context compaction |
+| `get_current_time` / `get_system_info` / `get_token_usage` | Reports runtime state |
+
+## Testing
+
+Subagent behavior is covered by `tests/test_subagent_stability.py`, including child step event emission, parent SSE forwarding, and `SUBAGENT_LLM_*` precedence over inherited parent provider/model.
+
+```bash
+python3 -m unittest tests/test_subagent_stability.py
 ```
 
 ## License

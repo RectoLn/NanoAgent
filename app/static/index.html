@@ -307,6 +307,65 @@ html, body {
 .step-block .content::-webkit-scrollbar { width: 5px; }
 .step-block .content::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 3px; }
 
+/* ─── Sub Agent 卡片 ───────────────────── */
+.subagent-card {
+  background: #fafafa; border: 1px solid #efefef; border-radius: 9px;
+  overflow: hidden; transition: border-color .15s;
+  flex-shrink: 0;
+}
+.subagent-card:hover { border-color: #e5e5e5; }
+.subagent-card.running { border-color: #e0e0e0; }
+.subagent-card.expanded { background: #fff; border-color: #e5e7eb; }
+.subagent-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; cursor: pointer; user-select: none;
+}
+.subagent-card.expanded .step-caret { transform: rotate(90deg); }
+.subagent-title { flex: 1; min-width: 0; font-size: 13px; color: #4b5563; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-title .tool { font-family: "SF Mono", Menlo, monospace; color: #111827; font-weight: 600; }
+.subagent-body { display: none; border-top: 1px solid #efefef; }
+.subagent-card.expanded .subagent-body { display: block; }
+.subagent-block { padding: 10px 12px; }
+.subagent-block + .subagent-block { border-top: 1px solid #f3f3f3; }
+.subagent-block .label {
+  font-size: 10px; color: #9ca3af; font-weight: 600;
+  letter-spacing: .6px; margin-bottom: 6px; text-transform: uppercase;
+}
+.subagent-task {
+  font-size: 12px; color: #4b5563; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+.subagent-step-row {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 26px; font-size: 12px; color: #4b5563;
+  border-top: 1px solid #f5f5f5;
+}
+.subagent-step-row:first-of-type { border-top: none; }
+.subagent-step-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: #d1d5db;
+}
+.subagent-step-row.running .subagent-step-dot { background: #4b5563; animation: blink 1.4s ease-in-out infinite; }
+.subagent-step-tool { font-family: "SF Mono", Menlo, monospace; color: #1f2937; font-weight: 500; flex-shrink: 0; }
+.subagent-step-input { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ca3af; }
+.subagent-summary-section + .subagent-summary-section { margin-top: 10px; }
+.subagent-summary-heading {
+  font-size: 12px; color: #111827; font-weight: 600;
+  margin-bottom: 4px;
+}
+.subagent-summary-text {
+  font-size: 12.5px; color: #4b5563; line-height: 1.65;
+  word-break: break-word;
+}
+.subagent-summary-text p { margin: 4px 0; }
+.subagent-summary-text p:first-child { margin-top: 0; }
+.subagent-summary-text p:last-child { margin-bottom: 0; }
+.subagent-summary-text ul,.subagent-summary-text ol { padding-left: 17px; margin: 4px 0; }
+.subagent-raw {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-family: inherit; font-size: 12.5px; color: #4b5563; line-height: 1.65;
+}
+
 /* ─── 最终答案 ───────────────────────────── */
 .bubble-final {
   padding: 16px 18px; border-radius: 11px;
@@ -599,6 +658,36 @@ html, body {
                 </div>
               </div>
             </div>
+            <div v-else-if="item.kind === 'subagent'" :class="['subagent-card', { running: item.running, expanded: item.expanded }]">
+              <div class="subagent-header" @click="item.expanded = !item.expanded">
+                <svg class="step-caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1 L7 5 L3 9 Z"/></svg>
+                <span class="step-num">#{{ item.step }}</span>
+                <span class="subagent-title">
+                  <span class="tool">Sub Agent</span>
+                  <span style="color:#9ca3af;"> · {{ item.running ? truncate(item.task || item.input, 58) : summaryPreview(item.summary) }}</span>
+                </span>
+                <span v-if="item.running" class="step-status running">running</span>
+                <span v-else class="step-status done">done</span>
+              </div>
+              <div class="subagent-body">
+                <div class="subagent-block">
+                  <div class="label">Task</div>
+                  <div class="subagent-task">{{ item.task || item.input || '(no task)' }}</div>
+                </div>
+                <div class="subagent-block">
+                  <div class="label">Steps</div>
+                  <div v-for="st in item.steps" :key="st.id" :class="['subagent-step-row', { running: st.running }]">
+                    <span class="subagent-step-dot"></span>
+                    <span class="subagent-step-tool">{{ st.name }}</span>
+                    <span class="subagent-step-input">{{ truncate(st.input, 90) }}</span>
+                  </div>
+                </div>
+                <div v-if="item.summary" class="subagent-block">
+                  <div class="label">Result</div>
+                  <div v-html="renderSubagentSummary(item.summary)"></div>
+                </div>
+              </div>
+            </div>
             <div v-else-if="item.kind === 'final'" class="bubble-final">
               <span class="answer-label">✓ Answer</span>
               <div class="md-content" v-html="renderMarkdown(item.content)"></div>
@@ -801,8 +890,12 @@ createApp({
             if (msg.tool_calls && msg.tool_calls.length > 0) {
               for (const tc of msg.tool_calls) {
                 stepNum++;
-                const card = reactive({ kind:'step', step:stepNum, action:tc.function.name,
-                  input:tc.function.arguments||'', observation:'', running:false, expanded:false, call_id:tc.id });
+                const toolName = tc.function.name;
+                const argsText = tc.function.arguments || '';
+                const args = parseToolArguments(argsText);
+                const card = reactive(toolName === 'run_subagent'
+                  ? { kind:'subagent', step:stepNum, action:toolName, task:String(args.task || ''), input:argsText, summary:'', running:false, expanded:false, steps:[], call_id:tc.id }
+                  : { kind:'step', step:stepNum, action:toolName, input:argsText, observation:'', running:false, expanded:false, call_id:tc.id });
                 cardMap[tc.id] = card;
                 timeline.push(card);
               }
@@ -811,7 +904,8 @@ createApp({
             }
           } else if (msg.role === 'tool') {
             const c = cardMap[msg.tool_call_id];
-            if (c) c.observation = msg.content;
+            if (c && c.kind === 'subagent') c.summary = msg.content;
+            else if (c) c.observation = msg.content;
           }
         }
         turnCount = curTurn;
@@ -894,10 +988,42 @@ createApp({
       return `Current context: ${formatTokens(context)} tokens\nTotal spent: ${formatTokens(total)} tokens`;
     };
     const escapeHtml = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const parseToolArguments = (s) => {
+      try { return JSON.parse(s || '{}') || {}; }
+      catch { return {}; }
+    };
     const renderMarkdown = (content) => {
       if (!content) return '';
       try { return (marked.parse || marked)(String(content), { breaks: true, gfm: true }); }
       catch { return escapeHtml(content); }
+    };
+    const summaryPreview = (content) => {
+      const text = String(content || '').replace(/^##\s+/gm, '').replace(/\s+/g, ' ').trim();
+      return truncate(text || '等待结果', 74);
+    };
+    const renderSubagentSummary = (content) => {
+      const text = String(content || '').trim();
+      if (!text) return '';
+      if (!/^##\s+/m.test(text)) {
+        return `<pre class="subagent-raw">${escapeHtml(text)}</pre>`;
+      }
+      const sections = [];
+      let current = null;
+      for (const line of text.split(/\r?\n/)) {
+        const match = line.match(/^##\s+(.+?)\s*$/);
+        if (match) {
+          current = { title: match[1], body: [] };
+          sections.push(current);
+        } else if (current) {
+          current.body.push(line);
+        }
+      }
+      return sections.map(section => (
+        `<div class="subagent-summary-section">` +
+        `<div class="subagent-summary-heading">${escapeHtml(section.title)}</div>` +
+        `<div class="subagent-summary-text">${renderMarkdown(section.body.join('\n').trim() || '—')}</div>` +
+        `</div>`
+      )).join('');
     };
 
     // ── 卡片管理 ──
@@ -912,8 +1038,36 @@ createApp({
       scrollBottom();
       return card;
     };
+    const newSubagentCard = (callId, task, input) => {
+      stepCounter++;
+      const card = reactive({
+        kind:'subagent',
+        step:stepCounter,
+        action:'run_subagent',
+        task:task || '',
+        input:input || '',
+        summary:'',
+        running:true,
+        expanded:true,
+        steps:[],
+        call_id:callId,
+      });
+      callCards[callId] = card;
+      timeline.push(card);
+      scrollBottom();
+      return card;
+    };
+    const finishSubagentStep = (card, subCallId) => {
+      if (!card || !Array.isArray(card.steps)) return;
+      const step = card.steps.find(s => s.id === subCallId) || [...card.steps].reverse().find(s => s.running);
+      if (step) step.running = false;
+    };
     // 完成时折叠所有卡片（running 置 false + 折叠）
-    const closeAllCards = () => Object.values(callCards).forEach(c => { c.running = false; c.expanded = false; });
+    const closeAllCards = () => Object.values(callCards).forEach(c => {
+      c.running = false;
+      c.expanded = false;
+      if (Array.isArray(c.steps)) c.steps.forEach(s => { s.running = false; });
+    });
 
     // ── 键盘发送 ──
     const onKey = (e) => {
@@ -960,11 +1114,61 @@ createApp({
             case 'tool_call':
               // 检查是否已经存在相同 call_id 的卡片，避免重复
               if (callCards[ev.call_id]) break;
-              newCard(ev.call_id, ev.name, ev.input_preview);
+              if (ev.name === 'run_subagent') {
+                newSubagentCard(ev.call_id, ev.task || '', ev.input_preview);
+              } else {
+                newCard(ev.call_id, ev.name, ev.input_preview);
+              }
               break;
             case 'observation': {
               const card = callCards[ev.call_id];
-              if (card) { card.observation = ev.content; card.running = false; card.expanded = false; }
+              if (card && card.kind === 'subagent') {
+                finishSubagentStep(card);
+                card.summary = ev.content;
+                card.running = false;
+                card.expanded = false;
+              } else if (card) {
+                card.observation = ev.content;
+                card.running = false;
+                card.expanded = false;
+              }
+              scrollBottom();
+              break;
+            }
+            case 'subagent_step': {
+              const card = callCards[ev.call_id];
+              if (card && card.kind === 'subagent') {
+                if (ev.done) {
+                  card.steps.forEach(s => { s.running = false; });
+                  card.summary = ev.summary || card.summary;
+                  card.running = false;
+                  card.expanded = false;
+                } else {
+                  card.steps.forEach(s => { s.running = false; });
+                  const stepId = ev.step || `${ev.tool}-${card.steps.length}`;
+                  if (!card.steps.find(s => s.id === stepId)) {
+                    card.steps.push({
+                      id: stepId,
+                      name: ev.tool || 'tool',
+                      input: ev.input_preview || '',
+                      observation: ev.observation_preview || '',
+                      running: true,
+                    });
+                  }
+                }
+              }
+              scrollBottom();
+              break;
+            }
+            case 'subagent_step_done': {
+              const card = callCards[ev.call_id];
+              if (card && card.kind === 'subagent') finishSubagentStep(card, ev.sub_call_id);
+              scrollBottom();
+              break;
+            }
+            case 'subagent_error': {
+              const card = callCards[ev.call_id];
+              if (card && card.kind === 'subagent' && !card.summary) card.summary = ev.content || '';
               scrollBottom();
               break;
             }
@@ -1196,7 +1400,7 @@ createApp({
        completedCount, progressPct,
        sidebarOpen, todoOpen,
        chatBody, landingInput, chatInput,
-       send, newChat, resumeTask, cancelCurrentTask, onKey, truncate, formatTokens, sessionTokenTitle, renderMarkdown,
+       send, newChat, resumeTask, cancelCurrentTask, onKey, truncate, formatTokens, sessionTokenTitle, renderMarkdown, renderSubagentSummary, summaryPreview,
        switchSession, deleteSession,
        activeSessions,
      };

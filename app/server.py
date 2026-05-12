@@ -288,7 +288,7 @@ def cancel_task(task_id: str = FPath(...)):
     """Request cancellation for a background task."""
     ok = TASK_MGR.cancel_task(task_id)
     if not ok:
-        return JSONResponse({"error": "浠诲姟涓嶅瓨鍦?"}, status_code=404)
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
     return {"ok": True}
 
 

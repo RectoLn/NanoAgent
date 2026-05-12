@@ -19,8 +19,10 @@ ToolCallAgent：基于 OpenAI Tool Call 协议的 Agent 主循环。
 """
 
 import json
+import queue
 import re
 import sys
+import threading
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +63,8 @@ class ToolCallAgent:
         system_prompt: str = None,
     ):
         self.llm = llm
+        self.llm_provider = getattr(llm, "provider", "") or ""
+        self.llm_model_id = getattr(llm, "model", "") or getattr(llm, "_model", "") or ""
         self.config = _load_config()
         self.session_id = session_id
         self.session = session  # Session 对象引用，用于 compression_history
@@ -788,15 +792,25 @@ class ToolCallAgent:
                     tool_name = tc.name
                     args_json = tc.arguments or "{}"
                     call_id = tc.id
+                    subagent_args = None
+                    subagent_parse_error = None
+                    if tool_name == "run_subagent":
+                        try:
+                            subagent_args = json.loads(args_json) if args_json.strip() else {}
+                        except json.JSONDecodeError as e:
+                            subagent_parse_error = e
 
                     # 给前端发送 tool_call 事件（预览参数摘要）
                     preview = args_json[:120] + ("…" if len(args_json) > 120 else "")
-                    yield {
+                    tool_event = {
                         "type": "tool_call",
                         "name": tool_name,
                         "input_preview": preview,
                         "call_id": call_id,
                     }
+                    if tool_name == "run_subagent" and isinstance(subagent_args, dict):
+                        tool_event["task"] = str(subagent_args.get("task") or "")
+                    yield tool_event
 
                     # Layer 3：检测 compact 工具调用
                     if tool_name == "compact":
@@ -810,7 +824,48 @@ class ToolCallAgent:
                         break
 
                     # 执行工具
-                    result = self._execute_tool_call(tool_name, args_json)
+                    if tool_name == "run_subagent":
+                        if subagent_parse_error:
+                            result = f"错误：工具参数 JSON 解析失败: {subagent_parse_error}"
+                        else:
+                            from tools.subagent import run_subagent
+
+                            subagent_args = subagent_args or {}
+                            subagent_events: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+                            subagent_result = {"value": ""}
+
+                            def run_subagent_tool() -> None:
+                                subagent_result["value"] = run_subagent(
+                                    str(subagent_args.get("task") or ""),
+                                    str(subagent_args.get("context") or ""),
+                                    event_queue=subagent_events,
+                                    call_id=call_id,
+                                    parent_provider=self.llm_provider,
+                                    parent_model_id=self.llm_model_id,
+                                )
+
+                            subagent_thread = threading.Thread(
+                                target=run_subagent_tool,
+                                name="nanoagent-run-subagent-tool",
+                                daemon=True,
+                            )
+                            subagent_thread.start()
+                            result = ""
+                            while True:
+                                try:
+                                    ev = subagent_events.get(timeout=0.3)
+                                    if ev.get("done"):
+                                        result = ev.get("summary", "")
+                                        break
+                                    yield ev
+                                except queue.Empty:
+                                    if not subagent_thread.is_alive():
+                                        result = subagent_result.get("value", "")
+                                        break
+                            subagent_thread.join(timeout=0)
+                            result = result or subagent_result.get("value", "") or "错误：run_subagent 返回空结果"
+                    else:
+                        result = self._execute_tool_call(tool_name, args_json)
                     print(f"[Tool] {tool_name} → {str(result)[:120]}")
 
                     # 推送 observation 事件

@@ -15,6 +15,7 @@ TaskManager:
 
 import threading
 import uuid
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 
@@ -22,10 +23,14 @@ from agent import ToolCallAgent
 from session_manager import SESSION_MGR
 
 
+_MAX_TASKS = 200
+
+
 @dataclass
 class TaskState:
     task_id: str
     session_id: str
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     status: str = "pending"  # pending/running/done/error/cancelled
     cancel_requested: bool = False
     events: List[Dict[str, Any]] = field(default_factory=list)
@@ -36,6 +41,13 @@ class TaskState:
 class TaskManager:
     def __init__(self):
         self.tasks: Dict[str, TaskState] = {}
+
+    def _evict(self) -> None:
+        if len(self.tasks) <= _MAX_TASKS:
+            return
+        ordered = sorted(self.tasks.values(), key=lambda t: t.created_at)
+        for task in ordered[:len(self.tasks) - _MAX_TASKS]:
+            del self.tasks[task.task_id]
 
     def start_task(
         self,
@@ -97,6 +109,7 @@ class TaskManager:
         thread = threading.Thread(target=run_task, daemon=True)
         task_state.thread = thread
         thread.start()
+        self._evict()
 
         return task_id
 

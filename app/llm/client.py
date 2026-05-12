@@ -12,6 +12,9 @@ class LLMClient:
         override: Optional[dict] = None,
     ):
         cfg = resolve(purpose, override)
+        self.provider = cfg.provider
+        self.base_url = cfg.base_url
+        self.model = cfg.model
         self._model = cfg.model
         self._is_reasoner = "reasoner" in cfg.model.lower()
         self._client = openai.OpenAI(
